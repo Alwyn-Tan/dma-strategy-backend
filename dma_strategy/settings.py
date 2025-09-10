@@ -38,7 +38,7 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
-ROOT_URLCONF = 'stock_project.urls'
+ROOT_URLCONF = 'dma_strategy.urls'
 
 TEMPLATES = [
     {
@@ -56,7 +56,7 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'stock_project.wsgi.application'
+WSGI_APPLICATION = 'dma_strategy.wsgi.application'
 
 DATABASES = {
     'default': {

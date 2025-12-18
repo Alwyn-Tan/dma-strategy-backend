@@ -1,3 +1,6 @@
+from pathlib import Path
+
+from django.conf import settings
 from rest_framework import serializers, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -25,6 +28,15 @@ class StockQuerySerializer(serializers.Serializer):
         if short_window >= long_window:
             raise serializers.ValidationError("short_window must be < long_window")
         return attrs
+
+
+class SignalsQuerySerializer(StockQuerySerializer):
+    gen_confirm_bars = serializers.IntegerField(required=False, default=0, min_value=0, max_value=50)
+    gen_min_cross_gap = serializers.IntegerField(required=False, default=0, min_value=0, max_value=365)
+
+    filter_signal_type = serializers.ChoiceField(required=False, default="all", choices=["all", "BUY", "SELL"])
+    filter_limit = serializers.IntegerField(required=False, allow_null=True, min_value=1, max_value=5000)
+    filter_sort = serializers.ChoiceField(required=False, default="desc", choices=["asc", "desc"])
 
 
 class StockDataView(APIView):
@@ -67,13 +79,19 @@ class SignalView(APIView):
     """获取交易信号"""
 
     def get(self, request):
-        params = StockQuerySerializer(data=request.query_params)
+        params = SignalsQuerySerializer(data=request.query_params)
         params.is_valid(raise_exception=True)
         stock_code = params.validated_data["code"]
         start_date = params.validated_data.get("start_date")
         end_date = params.validated_data.get("end_date")
         short_window = params.validated_data["short_window"]
         long_window = params.validated_data["long_window"]
+        gen_confirm_bars = params.validated_data["gen_confirm_bars"]
+        gen_min_cross_gap = params.validated_data["gen_min_cross_gap"]
+
+        filter_signal_type = params.validated_data["filter_signal_type"]
+        filter_limit = params.validated_data.get("filter_limit")
+        filter_sort = params.validated_data["filter_sort"]
 
         # 获取数据并生成信号
         try:
@@ -87,8 +105,69 @@ class SignalView(APIView):
 
         try:
             df = StrategyService.calculate_moving_averages(df, short_window, long_window)
-            signals = StrategyService.generate_signals(df)
+            signals = StrategyService.generate_signals(
+                df,
+                confirm_bars=gen_confirm_bars,
+                min_cross_gap=gen_min_cross_gap,
+            )
         except ValueError as e:
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
-        return Response(signals)
+        generated_count = len(signals)
+
+        if filter_signal_type != "all":
+            signals = [s for s in signals if s["signal_type"] == filter_signal_type]
+
+        signals = sorted(signals, key=lambda s: s["date"], reverse=(filter_sort == "desc"))
+        if filter_limit:
+            signals = signals[:filter_limit]
+
+        payload = {
+            "data": signals,
+            "meta": {
+                "generated_count": generated_count,
+                "returned_count": len(signals),
+                "params": {
+                    "code": stock_code,
+                    "start_date": start_date.isoformat() if start_date else None,
+                    "end_date": end_date.isoformat() if end_date else None,
+                    "short_window": short_window,
+                    "long_window": long_window,
+                    "gen_confirm_bars": gen_confirm_bars,
+                    "gen_min_cross_gap": gen_min_cross_gap,
+                    "filter_signal_type": filter_signal_type,
+                    "filter_limit": filter_limit,
+                    "filter_sort": filter_sort,
+                },
+            },
+        }
+        return Response(payload)
+
+
+class CodesView(APIView):
+    """
+    List available stock codes from CSV files under DATA_DIR.
+
+    Returns: [{ "code": "AAPL", "label": "AAPL", "file": "AAPL_3y.csv" }, ...]
+    """
+
+    def get(self, request):
+        data_dir = getattr(settings, "DATA_DIR", None)
+        if not data_dir:
+            return Response({"error": "DATA_DIR is not configured"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        data_dir = Path(data_dir)
+        if not data_dir.exists():
+            return Response({"error": f"DATA_DIR does not exist: {data_dir}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        items: list[dict] = []
+        for csv_path in sorted(data_dir.glob("*.csv")):
+            stem = csv_path.stem
+            code = stem[:-3] if stem.lower().endswith("_3y") else stem
+            try:
+                code = StockDataService._validate_code(code)
+            except ValueError:
+                continue
+            items.append({"code": code, "label": code, "file": csv_path.name})
+
+        return Response(items)

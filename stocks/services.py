@@ -125,11 +125,20 @@ class StrategyService:
         return df
 
     @staticmethod
-    def generate_signals(df: pd.DataFrame) -> list[dict]:
+    def generate_signals(
+        df: pd.DataFrame,
+        *,
+        confirm_bars: int = 0,
+        min_cross_gap: int = 0,
+    ) -> list[dict]:
         if df.empty:
             return []
         if "ma_short" not in df.columns or "ma_long" not in df.columns:
             raise ValueError("missing ma_short/ma_long columns; call calculate_moving_averages first")
+        if confirm_bars < 0:
+            raise ValueError("confirm_bars must be >= 0")
+        if min_cross_gap < 0:
+            raise ValueError("min_cross_gap must be >= 0")
 
         work = df.copy()
         work = work.dropna(subset=["ma_short", "ma_long"]).reset_index(drop=True)
@@ -139,21 +148,67 @@ class StrategyService:
         diff = work["ma_short"] - work["ma_long"]
         prev_diff = diff.shift(1)
 
-        buy = (diff > 0) & (prev_diff <= 0)
-        sell = (diff < 0) & (prev_diff >= 0)
-        signal_mask = buy | sell
+        buy_cross = (diff > 0) & (prev_diff <= 0)
+        sell_cross = (diff < 0) & (prev_diff >= 0)
+
+        def confirm_at(index: int, direction: str) -> Optional[int]:
+            """
+            Returns the confirmation index for a cross at `index`, or None if not confirmed.
+            Confirmation rule: after a cross, for the next `confirm_bars` bars (inclusive),
+            diff must stay on the same side (positive for BUY, negative for SELL).
+            Signal time is the last confirmation bar (index + confirm_bars).
+            """
+            if confirm_bars == 0:
+                return index
+
+            end = index + confirm_bars
+            if end >= len(work):
+                return None
+
+            segment = diff.iloc[index : end + 1]
+            if direction == "BUY":
+                return end if bool((segment > 0).all()) else None
+            return end if bool((segment < 0).all()) else None
 
         out: list[dict] = []
-        for i, row in work[signal_mask].iterrows():
-            signal_type = "BUY" if bool(buy.loc[i]) else "SELL"
-            out.append(
-                {
-                    "date": row["date"],
-                    "signal_type": signal_type,
-                    "price": float(row["close"]),
-                    "ma_short": float(row["ma_short"]),
-                    "ma_long": float(row["ma_long"]),
-                }
-            )
-        return out
+        last_idx_by_type: dict[str, int] = {}
 
+        for i in range(len(work)):
+            if bool(buy_cross.iloc[i]):
+                confirmed = confirm_at(i, "BUY")
+                if confirmed is None:
+                    continue
+                if "BUY" in last_idx_by_type and confirmed - last_idx_by_type["BUY"] <= min_cross_gap:
+                    continue
+                last_idx_by_type["BUY"] = confirmed
+                row = work.iloc[confirmed]
+                out.append(
+                    {
+                        "date": row["date"].isoformat(),
+                        "signal_type": "BUY",
+                        "price": float(row["close"]),
+                        "ma_short": float(row["ma_short"]),
+                        "ma_long": float(row["ma_long"]),
+                    }
+                )
+                continue
+
+            if bool(sell_cross.iloc[i]):
+                confirmed = confirm_at(i, "SELL")
+                if confirmed is None:
+                    continue
+                if "SELL" in last_idx_by_type and confirmed - last_idx_by_type["SELL"] <= min_cross_gap:
+                    continue
+                last_idx_by_type["SELL"] = confirmed
+                row = work.iloc[confirmed]
+                out.append(
+                    {
+                        "date": row["date"].isoformat(),
+                        "signal_type": "SELL",
+                        "price": float(row["close"]),
+                        "ma_short": float(row["ma_short"]),
+                        "ma_long": float(row["ma_long"]),
+                    }
+                )
+
+        return out

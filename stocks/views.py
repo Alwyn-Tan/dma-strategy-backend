@@ -1,3 +1,4 @@
+from datetime import date
 from pathlib import Path
 
 from django.conf import settings
@@ -13,9 +14,11 @@ from .services import StockDataService, StrategyService
 class StockQuerySerializer(serializers.Serializer):
     code = serializers.CharField(required=False, default="AAPL")
     start_date = serializers.DateField(required=False)
-    end_date = serializers.DateField(required=False)
+    end_date = serializers.DateField(required=False, default=date.today)
     short_window = serializers.IntegerField(required=False, default=5, min_value=1, max_value=500)
     long_window = serializers.IntegerField(required=False, default=20, min_value=1, max_value=500)
+    include_meta = serializers.BooleanField(required=False, default=False)
+    force_refresh = serializers.BooleanField(required=False, default=False)
 
     def validate(self, attrs):
         start_date = attrs.get("start_date")
@@ -50,10 +53,18 @@ class StockDataView(APIView):
         end_date = params.validated_data.get("end_date")
         short_window = params.validated_data["short_window"]
         long_window = params.validated_data["long_window"]
+        include_meta = params.validated_data.get("include_meta", False)
+        force_refresh = params.validated_data.get("force_refresh", False)
 
         # 获取股票数据
         try:
-            df = StockDataService.get_stock_data(stock_code, start_date, end_date)
+            df, meta = StockDataService.get_stock_data(
+                stock_code,
+                start_date,
+                end_date,
+                with_meta=True,
+                force_refresh=force_refresh,
+            )
         except FileNotFoundError as e:
             return Response({"error": str(e)}, status=status.HTTP_404_NOT_FOUND)
         except ValueError as e:
@@ -72,7 +83,20 @@ class StockDataView(APIView):
         # 需要先把 DataFrame 转为 object 再将 NaN 转为 None（输出为 JSON null）。
         df = df.astype(object).where(pd.notnull(df), None)
         data = df.to_dict("records")
-        return Response(data)
+        if meta is not None:
+            meta["returned_count"] = len(data)
+
+        payload = {"data": data, "meta": meta} if include_meta else data
+        resp = Response(payload)
+        if meta is not None:
+            resp["X-Data-Status"] = meta.get("data_status", "")
+            data_range = meta.get("data_range", {})
+            resp["X-Data-Range"] = f"{data_range.get('min_date') or ''},{data_range.get('max_date') or ''}"
+            resp["X-Data-Last-Updated"] = meta.get("last_modified") or ""
+            refresh = meta.get("refresh", {})
+            resp["X-Data-Refresh"] = refresh.get("status", "")
+            resp["X-Data-Refresh-Reason"] = refresh.get("reason", "")
+        return resp
 
 
 class SignalView(APIView):
@@ -88,6 +112,8 @@ class SignalView(APIView):
         long_window = params.validated_data["long_window"]
         gen_confirm_bars = params.validated_data["gen_confirm_bars"]
         gen_min_cross_gap = params.validated_data["gen_min_cross_gap"]
+        include_meta = params.validated_data.get("include_meta", False)
+        force_refresh = params.validated_data.get("force_refresh", False)
 
         filter_signal_type = params.validated_data["filter_signal_type"]
         filter_limit = params.validated_data.get("filter_limit")
@@ -95,7 +121,23 @@ class SignalView(APIView):
 
         # 获取数据并生成信号
         try:
-            df = StockDataService.get_stock_data(stock_code, start_date, end_date)
+            if include_meta:
+                df, data_meta = StockDataService.get_stock_data(
+                    stock_code,
+                    start_date,
+                    end_date,
+                    with_meta=True,
+                    force_refresh=force_refresh,
+                )
+            else:
+                data_meta = None
+                df = StockDataService.get_stock_data(
+                    stock_code,
+                    start_date,
+                    end_date,
+                    with_meta=False,
+                    force_refresh=force_refresh,
+                )
         except FileNotFoundError as e:
             return Response({"error": str(e)}, status=status.HTTP_404_NOT_FOUND)
         except ValueError as e:
@@ -122,25 +164,26 @@ class SignalView(APIView):
         if filter_limit:
             signals = signals[:filter_limit]
 
-        payload = {
-            "data": signals,
-            "meta": {
-                "generated_count": generated_count,
-                "returned_count": len(signals),
-                "params": {
-                    "code": stock_code,
-                    "start_date": start_date.isoformat() if start_date else None,
-                    "end_date": end_date.isoformat() if end_date else None,
-                    "short_window": short_window,
-                    "long_window": long_window,
-                    "gen_confirm_bars": gen_confirm_bars,
-                    "gen_min_cross_gap": gen_min_cross_gap,
-                    "filter_signal_type": filter_signal_type,
-                    "filter_limit": filter_limit,
-                    "filter_sort": filter_sort,
-                },
+        meta = {
+            "generated_count": generated_count,
+            "returned_count": len(signals),
+            "params": {
+                "code": stock_code,
+                "start_date": start_date.isoformat() if start_date else None,
+                "end_date": end_date.isoformat() if end_date else None,
+                "short_window": short_window,
+                "long_window": long_window,
+                "gen_confirm_bars": gen_confirm_bars,
+                "gen_min_cross_gap": gen_min_cross_gap,
+                "filter_signal_type": filter_signal_type,
+                "filter_limit": filter_limit,
+                "filter_sort": filter_sort,
             },
         }
+        if data_meta is not None:
+            meta["data_meta"] = data_meta
+
+        payload = {"data": signals, "meta": meta}
         return Response(payload)
 
 

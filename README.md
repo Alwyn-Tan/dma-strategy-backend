@@ -54,6 +54,9 @@ pip install -r requirements.txt
 
 - `SECRET_KEY` / `DEBUG` / `ALLOWED_HOSTS`
 - `DATA_DIR`：CSV 数据目录（例如 `./data`，默认建议就是项目根目录下的 `data/`）
+- 自动刷新（可选）：
+  - `AUTO_REFRESH_ON_REQUEST`：是否按请求自动刷新（默认 true）
+  - `AUTO_REFRESH_COOLDOWN_SECONDS`：同一股票自动刷新冷却时间（默认 3600 秒）
 
 ### 5) 启动服务
 
@@ -67,13 +70,31 @@ python manage.py runserver
 项目在 `dma_strategy/urls.py` 中配置了以下路由（默认前缀 `/api`）：
 
 - `GET /api/codes/`：获取可用代码列表（从 `DATA_DIR` 扫描 CSV 文件名）
-- `GET /api/stock-data/`：获取行情与均线数据
+- `GET /api/stock-data/`：获取行情与均线数据（支持按请求自动刷新）
 - `GET /api/signals/`：获取交易信号（返回 `{ data, meta }`）
 
 `/api/signals/` 参数分两类：
 
 - **生成参数（影响生成）**：`gen_confirm_bars`、`gen_min_cross_gap`（同类型信号间隔）
 - **过滤参数（仅影响返回）**：`filter_signal_type`、`filter_sort`（默认 `desc`）、`filter_limit`
+
+`/api/stock-data/` 额外参数：
+
+- `include_meta`：返回 `{ data, meta }`，并附带数据范围/刷新状态
+- `force_refresh`：忽略冷却时间，强制尝试刷新
+- `end_date`：未传时默认今天，用于判断是否需要刷新以及数据过滤
+
+`/api/signals/` 同样支持 `include_meta` / `force_refresh`（`meta.data_meta` 中包含数据状态）
+
+自动刷新规则：**仅当请求的日期区间不被本地 CSV 覆盖时才会触发刷新**。
+
+自动刷新响应头（仅 `include_meta=true` 时添加）：
+
+- `X-Data-Status`：`up_to_date` 或 `stale`
+- `X-Data-Range`：`min_date,max_date`
+- `X-Data-Last-Updated`：CSV 最后修改时间（UTC ISO）
+- `X-Data-Refresh`：`updated` / `failed` / `skipped`
+- `X-Data-Refresh-Reason`：刷新原因或失败提示
 
 ## CSV 数据约定（MVP）
 
@@ -86,7 +107,7 @@ python manage.py runserver
 获取行情数据（示例参数）：
 
 ```bash
-curl "http://127.0.0.1:8000/api/stock-data/?code=AAPL&short_window=5&long_window=20" \
+curl "http://127.0.0.1:8000/api/stock-data/?code=AAPL&short_window=5&long_window=20&include_meta=true" \
   -H "Content-Type: application/json"
 ```
 

@@ -12,6 +12,8 @@ ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 
 DATA_DIR = Path(os.getenv('DATA_DIR', BASE_DIR / 'data'))
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO').upper()
+AUTO_REFRESH_ON_REQUEST = os.getenv('AUTO_REFRESH_ON_REQUEST', 'true').lower() in {'1', 'true', 'yes'}
+AUTO_REFRESH_COOLDOWN_SECONDS = int(os.getenv('AUTO_REFRESH_COOLDOWN_SECONDS', '3600'))
 
 INSTALLED_APPS = [
     'django.contrib.admin',

@@ -99,3 +99,42 @@ def test_read_price_csv_repo_format(tmp_path):
     df = StockDataService.read_price_csv(p)
     assert list(df.columns) == ["date", "open", "high", "low", "close", "volume"]
     assert df.iloc[0]["date"] == date(2025, 1, 1)
+
+
+@pytest.mark.django_db
+def test_should_refresh_only_when_range_missing(settings):
+    settings.AUTO_REFRESH_ON_REQUEST = True
+    settings.AUTO_REFRESH_COOLDOWN_SECONDS = 0
+
+    should, reason = StockDataService._should_refresh(
+        "AAPL",
+        start_date=date(2025, 1, 2),
+        end_date=date(2025, 1, 5),
+        min_date=date(2025, 1, 1),
+        max_date=date(2025, 1, 10),
+        force_refresh=False,
+    )
+    assert should is False
+    assert reason == "covered_by_local"
+
+    should, reason = StockDataService._should_refresh(
+        "AAPL",
+        start_date=date(2025, 1, 2),
+        end_date=date(2025, 1, 12),
+        min_date=date(2025, 1, 1),
+        max_date=date(2025, 1, 10),
+        force_refresh=False,
+    )
+    assert should is True
+    assert reason == "end_date_after_max_date"
+
+    should, reason = StockDataService._should_refresh(
+        "AAPL",
+        start_date=date(2024, 12, 20),
+        end_date=date(2025, 1, 5),
+        min_date=date(2025, 1, 1),
+        max_date=date(2025, 1, 10),
+        force_refresh=False,
+    )
+    assert should is True
+    assert reason == "start_date_before_min_date"

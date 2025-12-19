@@ -61,3 +61,24 @@ def test_stock_data_include_meta_returns_meta_and_headers(client, settings, tmp_
     assert "data" in body and "meta" in body
     assert body["meta"]["data_status"] == "up_to_date"
     assert resp["X-Data-Status"] == "up_to_date"
+
+
+@pytest.mark.django_db
+def test_stock_data_include_performance_returns_series(client, settings, tmp_path):
+    settings.DATA_DIR = tmp_path
+    csv = (
+        "date,open,high,low,close,volume\n"
+        "2025-01-01,10,10,10,10,100\n"
+        "2025-01-02,10,10,10,11,100\n"
+        "2025-01-03,11,11,11,12,100\n"
+        "2025-01-04,12,12,12,13,100\n"
+    )
+    (tmp_path / "AAPL.csv").write_text(csv)
+
+    resp = client.get(
+        "/api/stock-data/?code=AAPL&short_window=2&long_window=3&include_performance=true&end_date=2025-01-04"
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "data" in body and "performance" in body
+    assert len(body["performance"]["strategy"]) == len(body["data"])

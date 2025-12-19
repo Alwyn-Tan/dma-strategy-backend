@@ -19,6 +19,9 @@ class StockQuerySerializer(serializers.Serializer):
     long_window = serializers.IntegerField(required=False, default=20, min_value=1, max_value=500)
     include_meta = serializers.BooleanField(required=False, default=False)
     force_refresh = serializers.BooleanField(required=False, default=False)
+    include_performance = serializers.BooleanField(required=False, default=False)
+    gen_confirm_bars = serializers.IntegerField(required=False, default=0, min_value=0, max_value=50)
+    gen_min_cross_gap = serializers.IntegerField(required=False, default=0, min_value=0, max_value=365)
 
     def validate(self, attrs):
         start_date = attrs.get("start_date")
@@ -55,6 +58,9 @@ class StockDataView(APIView):
         long_window = params.validated_data["long_window"]
         include_meta = params.validated_data.get("include_meta", False)
         force_refresh = params.validated_data.get("force_refresh", False)
+        include_performance = params.validated_data.get("include_performance", False)
+        gen_confirm_bars = params.validated_data.get("gen_confirm_bars", 0)
+        gen_min_cross_gap = params.validated_data.get("gen_min_cross_gap", 0)
 
         # 获取股票数据
         try:
@@ -78,6 +84,21 @@ class StockDataView(APIView):
         except ValueError as e:
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
+        performance = None
+        if include_performance:
+            try:
+                performance = StrategyService.calculate_performance(
+                    df,
+                    initial_capital=100,
+                    fee_rate=0.001,
+                    slippage_rate=0.0005,
+                    allow_fractional=True,
+                    confirm_bars=gen_confirm_bars,
+                    min_cross_gap=gen_min_cross_gap,
+                )
+            except ValueError as e:
+                return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
         # 转换为前端可用的格式
         # DRF 的 JSONRenderer 默认不允许 NaN/Infinity；pandas 的 rolling 会产生 NaN，
         # 需要先把 DataFrame 转为 object 再将 NaN 转为 None（输出为 JSON null）。
@@ -85,8 +106,27 @@ class StockDataView(APIView):
         data = df.to_dict("records")
         if meta is not None:
             meta["returned_count"] = len(data)
+            if include_performance:
+                meta["assumptions"] = {
+                    "mode": "research",
+                    "fill": "next_open",
+                    "initial_capital": 100,
+                    "fee_rate": 0.001,
+                    "slippage_rate": 0.0005,
+                    "allow_fractional": True,
+                    "price_adjusted": False,
+                    "signal_rules": {
+                        "confirm_bars": gen_confirm_bars,
+                        "min_cross_gap": gen_min_cross_gap,
+                    },
+                }
 
-        payload = {"data": data, "meta": meta} if include_meta else data
+        if include_meta or include_performance:
+            payload = {"data": data, "meta": meta}
+            if include_performance:
+                payload["performance"] = performance
+        else:
+            payload = data
         resp = Response(payload)
         if meta is not None:
             resp["X-Data-Status"] = meta.get("data_status", "")

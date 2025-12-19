@@ -467,3 +467,89 @@ class StrategyService:
                 )
 
         return out
+
+    @staticmethod
+    def calculate_performance(
+        df: pd.DataFrame,
+        *,
+        initial_capital: float = 100.0,
+        fee_rate: float = 0.001,
+        slippage_rate: float = 0.0005,
+        allow_fractional: bool = True,
+        confirm_bars: int = 0,
+        min_cross_gap: int = 0,
+    ) -> dict[str, list[dict]]:
+        if df.empty:
+            return {"strategy": [], "benchmark": []}
+        if "open" not in df.columns or "close" not in df.columns:
+            raise ValueError("missing open/close columns")
+        if "ma_short" not in df.columns or "ma_long" not in df.columns:
+            raise ValueError("missing ma_short/ma_long columns; call calculate_moving_averages first")
+        if initial_capital <= 0:
+            raise ValueError("initial_capital must be > 0")
+        if fee_rate < 0 or slippage_rate < 0:
+            raise ValueError("fee_rate and slippage_rate must be >= 0")
+
+        work = df.copy().reset_index(drop=True)
+        work = work.dropna(subset=["date", "open", "close"])
+        if work.empty:
+            return {"strategy": [], "benchmark": []}
+
+        def to_iso(value) -> str:
+            return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+        index_by_date = {to_iso(row["date"]): idx for idx, row in work.iterrows()}
+        signals = StrategyService.generate_signals(
+            work,
+            confirm_bars=confirm_bars,
+            min_cross_gap=min_cross_gap,
+        )
+
+        actions_by_index: dict[int, str] = {}
+        for signal in signals:
+            idx = index_by_date.get(signal["date"])
+            if idx is None:
+                continue
+            exec_idx = idx + 1
+            if exec_idx >= len(work):
+                continue
+            if exec_idx in actions_by_index:
+                continue
+            actions_by_index[exec_idx] = signal["signal_type"]
+
+        cash = float(initial_capital)
+        shares = 0.0
+        first_close = float(work.loc[0, "close"])
+
+        strategy_series: list[dict] = []
+        benchmark_series: list[dict] = []
+
+        for i, row in work.iterrows():
+            action = actions_by_index.get(i)
+            open_price = float(row["open"])
+            close_price = float(row["close"])
+
+            if action == "BUY" and shares <= 0 and cash > 0 and open_price > 0:
+                effective_price = open_price * (1 + slippage_rate)
+                unit_cost = effective_price * (1 + fee_rate)
+                if unit_cost > 0:
+                    if allow_fractional:
+                        buy_shares = cash / unit_cost
+                    else:
+                        buy_shares = int(cash / unit_cost)
+                    if buy_shares > 0:
+                        cash -= buy_shares * unit_cost
+                        shares += buy_shares
+
+            elif action == "SELL" and shares > 0 and open_price > 0:
+                effective_price = open_price * (1 - slippage_rate)
+                unit_revenue = effective_price * (1 - fee_rate)
+                cash += shares * unit_revenue
+                shares = 0.0
+
+            equity = cash + shares * close_price
+            date_str = to_iso(row["date"])
+            strategy_series.append({"date": date_str, "value": equity / initial_capital})
+            benchmark_series.append({"date": date_str, "value": (close_price / first_close) if first_close else 0.0})
+
+        return {"strategy": strategy_series, "benchmark": benchmark_series}

@@ -23,6 +23,68 @@ class StockQuerySerializer(serializers.Serializer):
     gen_confirm_bars = serializers.IntegerField(required=False, default=0, min_value=0, max_value=50)
     gen_min_cross_gap = serializers.IntegerField(required=False, default=0, min_value=0, max_value=365)
 
+    strategy_mode = serializers.ChoiceField(required=False, default="basic", choices=["basic", "advanced"])
+
+    # Advanced strategy parameters (used when strategy_mode=advanced)
+    regime_ma_window = serializers.IntegerField(required=False, default=200, min_value=2, max_value=1000)
+    use_adx_filter = serializers.BooleanField(required=False, default=False)
+    adx_window = serializers.IntegerField(required=False, default=14, min_value=2, max_value=200)
+    adx_threshold = serializers.FloatField(required=False, default=20.0, min_value=0.0, max_value=100.0)
+
+    ensemble_pairs = serializers.CharField(required=False, default="5:20,10:50,20:100,50:200", allow_blank=True)
+    ensemble_ma_type = serializers.ChoiceField(required=False, default="sma", choices=["sma", "ema"])
+
+    target_vol = serializers.FloatField(required=False, default=0.02, min_value=0.0, max_value=1.0)
+    vol_window = serializers.IntegerField(required=False, default=14, min_value=2, max_value=200)
+    max_leverage = serializers.FloatField(required=False, default=1.0, min_value=0.0, max_value=10.0)
+    min_vol_floor = serializers.FloatField(required=False, default=1e-6, min_value=1e-12, max_value=1.0)
+
+    use_chandelier_stop = serializers.BooleanField(required=False, default=False)
+    chandelier_k = serializers.FloatField(required=False, default=3.0, min_value=0.1, max_value=10.0)
+    use_vol_stop = serializers.BooleanField(required=False, default=False)
+    vol_stop_atr_mult = serializers.FloatField(required=False, default=2.0, min_value=0.1, max_value=20.0)
+
+    @staticmethod
+    def _parse_ensemble_pairs(value: str) -> list[tuple[int, int]]:
+        raw = (value or "").strip()
+        if not raw:
+            return []
+        pairs: list[tuple[int, int]] = []
+        for part in raw.split(","):
+            token = part.strip()
+            if not token:
+                continue
+            if ":" not in token:
+                raise serializers.ValidationError("ensemble_pairs must be like '5:20,10:50'")
+            left, right = token.split(":", 1)
+            try:
+                short_w = int(left)
+                long_w = int(right)
+            except ValueError as e:
+                raise serializers.ValidationError("ensemble_pairs must contain integer windows") from e
+            if short_w < 1 or long_w < 1:
+                raise serializers.ValidationError("ensemble_pairs windows must be >= 1")
+            if short_w >= long_w:
+                raise serializers.ValidationError("ensemble_pairs requires short < long for each pair")
+            if short_w > 2000 or long_w > 2000:
+                raise serializers.ValidationError("ensemble_pairs windows must be <= 2000")
+            pairs.append((short_w, long_w))
+
+        if not pairs:
+            return []
+        if len(pairs) > 12:
+            raise serializers.ValidationError("ensemble_pairs supports up to 12 pairs")
+
+        # Deduplicate while preserving order.
+        out: list[tuple[int, int]] = []
+        seen = set()
+        for pair in pairs:
+            if pair in seen:
+                continue
+            seen.add(pair)
+            out.append(pair)
+        return out
+
     def validate(self, attrs):
         start_date = attrs.get("start_date")
         end_date = attrs.get("end_date")
@@ -33,12 +95,24 @@ class StockQuerySerializer(serializers.Serializer):
         long_window = attrs.get("long_window", 20)
         if short_window >= long_window:
             raise serializers.ValidationError("short_window must be < long_window")
+
+        if attrs.get("strategy_mode") == "advanced" and attrs.get("include_performance"):
+            try:
+                pairs = self._parse_ensemble_pairs(attrs.get("ensemble_pairs", ""))
+            except serializers.ValidationError:
+                raise
+            attrs["ensemble_pairs"] = pairs
+            if not pairs:
+                raise serializers.ValidationError("ensemble_pairs is required when strategy_mode=advanced")
         return attrs
 
 
 class SignalsQuerySerializer(StockQuerySerializer):
     gen_confirm_bars = serializers.IntegerField(required=False, default=0, min_value=0, max_value=50)
     gen_min_cross_gap = serializers.IntegerField(required=False, default=0, min_value=0, max_value=365)
+
+    # Signals endpoint remains basic-mode only (trade list), advanced mode is for performance backtests.
+    strategy_mode = serializers.ChoiceField(required=False, default="basic", choices=["basic"])
 
     filter_signal_type = serializers.ChoiceField(required=False, default="all", choices=["all", "BUY", "SELL"])
     filter_limit = serializers.IntegerField(required=False, allow_null=True, min_value=1, max_value=5000)
@@ -61,6 +135,7 @@ class StockDataView(APIView):
         include_performance = params.validated_data.get("include_performance", False)
         gen_confirm_bars = params.validated_data.get("gen_confirm_bars", 0)
         gen_min_cross_gap = params.validated_data.get("gen_min_cross_gap", 0)
+        strategy_mode = params.validated_data.get("strategy_mode", "basic")
 
         # 获取股票数据
         try:
@@ -87,15 +162,35 @@ class StockDataView(APIView):
         performance = None
         if include_performance:
             try:
-                performance = StrategyService.calculate_performance(
-                    df,
-                    initial_capital=100,
-                    fee_rate=0.001,
-                    slippage_rate=0.0005,
-                    allow_fractional=True,
-                    confirm_bars=gen_confirm_bars,
-                    min_cross_gap=gen_min_cross_gap,
-                )
+                perf_kwargs = {
+                    "initial_capital": 100,
+                    "fee_rate": 0.001,
+                    "slippage_rate": 0.0005,
+                    "allow_fractional": True,
+                    "confirm_bars": gen_confirm_bars,
+                    "min_cross_gap": gen_min_cross_gap,
+                    "strategy_mode": strategy_mode,
+                }
+                if strategy_mode == "advanced":
+                    perf_kwargs.update(
+                        {
+                            "regime_ma_window": params.validated_data.get("regime_ma_window", 200),
+                            "use_adx_filter": params.validated_data.get("use_adx_filter", False),
+                            "adx_window": params.validated_data.get("adx_window", 14),
+                            "adx_threshold": params.validated_data.get("adx_threshold", 20.0),
+                            "ensemble_pairs": params.validated_data.get("ensemble_pairs", []),
+                            "ensemble_ma_type": params.validated_data.get("ensemble_ma_type", "sma"),
+                            "target_vol": params.validated_data.get("target_vol", 0.02),
+                            "vol_window": params.validated_data.get("vol_window", 14),
+                            "max_leverage": params.validated_data.get("max_leverage", 1.0),
+                            "min_vol_floor": params.validated_data.get("min_vol_floor", 1e-6),
+                            "use_chandelier_stop": params.validated_data.get("use_chandelier_stop", False),
+                            "chandelier_k": params.validated_data.get("chandelier_k", 3.0),
+                            "use_vol_stop": params.validated_data.get("use_vol_stop", False),
+                            "vol_stop_atr_mult": params.validated_data.get("vol_stop_atr_mult", 2.0),
+                        }
+                    )
+                performance = StrategyService.calculate_performance(df, **perf_kwargs)
             except ValueError as e:
                 return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -120,6 +215,32 @@ class StockDataView(APIView):
                         "min_cross_gap": gen_min_cross_gap,
                     },
                 }
+                if strategy_mode == "advanced":
+                    meta["assumptions"]["strategy"] = {
+                        "strategy_mode": strategy_mode,
+                        "regime": {
+                            "ma_window": params.validated_data.get("regime_ma_window", 200),
+                            "use_adx_filter": params.validated_data.get("use_adx_filter", False),
+                            "adx_window": params.validated_data.get("adx_window", 14),
+                            "adx_threshold": params.validated_data.get("adx_threshold", 20.0),
+                        },
+                        "ensemble": {
+                            "pairs": params.validated_data.get("ensemble_pairs", []),
+                            "ma_type": params.validated_data.get("ensemble_ma_type", "sma"),
+                        },
+                        "vol_targeting": {
+                            "target_vol": params.validated_data.get("target_vol", 0.02),
+                            "vol_window": params.validated_data.get("vol_window", 14),
+                            "max_leverage": params.validated_data.get("max_leverage", 1.0),
+                            "min_vol_floor": params.validated_data.get("min_vol_floor", 1e-6),
+                        },
+                        "exits": {
+                            "use_chandelier_stop": params.validated_data.get("use_chandelier_stop", False),
+                            "chandelier_k": params.validated_data.get("chandelier_k", 3.0),
+                            "use_vol_stop": params.validated_data.get("use_vol_stop", False),
+                            "vol_stop_atr_mult": params.validated_data.get("vol_stop_atr_mult", 2.0),
+                        },
+                    }
 
         if include_meta or include_performance:
             payload = {"data": data, "meta": meta}

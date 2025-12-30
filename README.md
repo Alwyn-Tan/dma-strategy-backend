@@ -83,6 +83,18 @@ python manage.py runserver
 - `include_meta`：返回 `{ data, meta }`，并附带数据范围/刷新状态
 - `force_refresh`：忽略冷却时间，强制尝试刷新
 - `end_date`：未传时默认今天，用于判断是否需要刷新以及数据过滤
+- `include_performance`：返回策略与基准的净值曲线（研究模式：信号在次日开盘成交）
+- `strategy_mode`：`basic`（默认，双均线金叉/死叉）或 `advanced`（趋势结构增强，详见下方）
+
+`strategy_mode=advanced`（仅当 `include_performance=true` 时生效）常用参数：
+
+- `ensemble_pairs`：均线组合集成，例如 `5:20,10:50,20:100,50:200`（必填）
+- `ensemble_ma_type`：`sma` 或 `ema`（默认 `sma`）
+- `regime_ma_window`：长期趋势过滤窗口（默认 `200`）
+- `use_adx_filter` / `adx_window` / `adx_threshold`：ADX 趋势强度过滤（默认关闭）
+- `target_vol` / `vol_window` / `max_leverage` / `min_vol_floor`：波动率目标仓位（inverse-vol scaling）
+- `use_chandelier_stop` / `chandelier_k`：ATR 吊灯止损（默认关闭）
+- `use_vol_stop` / `vol_stop_atr_mult`：ATR 波动率止损（默认关闭）
 
 `/api/signals/` 同样支持 `include_meta` / `force_refresh`（`meta.data_meta` 中包含数据状态）
 
@@ -108,6 +120,13 @@ python manage.py runserver
 
 ```bash
 curl "http://127.0.0.1:8000/api/stock-data/?code=AAPL&short_window=5&long_window=20&include_meta=true" \
+  -H "Content-Type: application/json"
+```
+
+获取带高级模式回测（示例参数）：
+
+```bash
+curl "http://127.0.0.1:8000/api/stock-data/?code=AAPL&include_performance=true&strategy_mode=advanced&ensemble_pairs=5:20,10:50,20:100,50:200&regime_ma_window=200&target_vol=0.02&vol_window=14" \
   -H "Content-Type: application/json"
 ```
 

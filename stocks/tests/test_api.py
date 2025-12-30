@@ -82,3 +82,48 @@ def test_stock_data_include_performance_returns_series(client, settings, tmp_pat
     body = resp.json()
     assert "data" in body and "performance" in body
     assert len(body["performance"]["strategy"]) == len(body["data"])
+
+
+@pytest.mark.django_db
+def test_stock_data_include_performance_advanced_includes_assumptions(client, settings, tmp_path):
+    settings.DATA_DIR = tmp_path
+    csv = (
+        "date,open,high,low,close,volume\n"
+        "2025-01-01,10,11,9,10,100\n"
+        "2025-01-02,10,11,9,11,100\n"
+        "2025-01-03,11,12,10,12,100\n"
+        "2025-01-04,12,13,11,13,100\n"
+        "2025-01-05,13,14,12,14,100\n"
+    )
+    (tmp_path / "AAPL.csv").write_text(csv)
+
+    resp = client.get(
+        "/api/stock-data/?code=AAPL&include_performance=true&strategy_mode=advanced"
+        "&ensemble_pairs=2:3&regime_ma_window=2&vol_window=2&target_vol=0.02"
+        "&end_date=2025-01-05"
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "performance" in body
+    assert "meta" in body and "assumptions" in body["meta"]
+    assert body["meta"]["assumptions"]["strategy"]["strategy_mode"] == "advanced"
+    assert len(body["performance"]["strategy"]) == len(body["data"])
+
+
+@pytest.mark.django_db
+def test_stock_data_advanced_rejects_invalid_ensemble_pairs(client, settings, tmp_path):
+    settings.DATA_DIR = tmp_path
+    csv = (
+        "date,open,high,low,close,volume\n"
+        "2025-01-01,10,11,9,10,100\n"
+        "2025-01-02,10,11,9,11,100\n"
+        "2025-01-03,11,12,10,12,100\n"
+        "2025-01-04,12,13,11,13,100\n"
+    )
+    (tmp_path / "AAPL.csv").write_text(csv)
+
+    resp = client.get(
+        "/api/stock-data/?code=AAPL&include_performance=true&strategy_mode=advanced"
+        "&ensemble_pairs=abc&regime_ma_window=2&end_date=2025-01-04"
+    )
+    assert resp.status_code == 400

@@ -84,6 +84,101 @@ def test_generate_signals_min_cross_gap_same_type():
 
 
 @pytest.mark.django_db
+def test_calculate_atr_constant_range_converges():
+    df = pd.DataFrame(
+        {
+            "date": [date(2025, 1, d) for d in range(1, 31)],
+            "open": [9.0] * 30,
+            "high": [10.0] * 30,
+            "low": [8.0] * 30,
+            "close": [9.0] * 30,
+            "volume": [100] * 30,
+        }
+    )
+    atr = StrategyService.calculate_atr(df, window=14)
+    assert len(atr) == len(df)
+    assert atr.isna().sum() >= 13
+    assert float(atr.dropna().iloc[-1]) == pytest.approx(2.0, abs=1e-6)
+
+
+@pytest.mark.django_db
+def test_calculate_adx_returns_0_to_100():
+    df = pd.DataFrame(
+        {
+            "date": [date(2025, 1, d) for d in range(1, 41)],
+            "open": [float(d) for d in range(1, 41)],
+            "high": [float(d) + 1 for d in range(1, 41)],
+            "low": [float(d) for d in range(1, 41)],
+            "close": [float(d) + 0.5 for d in range(1, 41)],
+            "volume": [100] * 40,
+        }
+    )
+    adx = StrategyService.calculate_adx(df, window=14)
+    assert len(adx) == len(df)
+    tail = adx.dropna()
+    assert not tail.empty
+    assert (tail >= 0).all()
+    assert (tail <= 100).all()
+
+
+@pytest.mark.django_db
+def test_calculate_performance_advanced_returns_series():
+    df = pd.DataFrame(
+        {
+            "date": [date(2025, 1, d) for d in range(1, 21)],
+            "open": [float(10 + d) for d in range(20)],
+            "high": [float(10 + d) + 1 for d in range(20)],
+            "low": [float(10 + d) - 1 for d in range(20)],
+            "close": [float(10 + d) for d in range(20)],
+            "volume": [100] * 20,
+        }
+    )
+    out = StrategyService.calculate_performance(
+        df,
+        strategy_mode="advanced",
+        regime_ma_window=3,
+        use_adx_filter=False,
+        ensemble_pairs=[(2, 3)],
+        ensemble_ma_type="sma",
+        target_vol=0.02,
+        vol_window=2,
+        max_leverage=1.0,
+        min_vol_floor=1e-6,
+    )
+    assert "strategy" in out and "benchmark" in out
+    assert len(out["strategy"]) == len(df)
+    assert out["strategy"][0]["value"] == pytest.approx(1.0)
+
+
+@pytest.mark.django_db
+def test_advanced_ensemble_produces_partial_exposure():
+    df = pd.DataFrame(
+        {
+            "date": [date(2025, 1, d) for d in range(1, 7)],
+            "open": [10, 9, 8, 7, 6, 7],
+            "high": [10, 9, 8, 7, 6, 7],
+            "low": [10, 9, 8, 7, 6, 7],
+            "close": [10, 9, 8, 7, 6, 7],
+            "volume": [100] * 6,
+        }
+    )
+    exposure = StrategyService._advanced_target_exposure(
+        df,
+        regime_ma_window=2,
+        use_adx_filter=False,
+        adx_window=14,
+        adx_threshold=20.0,
+        ensemble_pairs=[(1, 2), (3, 5)],
+        ensemble_ma_type="sma",
+        target_vol=0.0,
+        vol_window=14,
+        max_leverage=1.0,
+        min_vol_floor=1e-6,
+    )
+    assert float(exposure.iloc[-1]) == pytest.approx(0.5)
+
+
+@pytest.mark.django_db
 def test_read_price_csv_repo_format(tmp_path):
     # Matches the repo's "Price/Ticker/Date" header style.
     csv = (

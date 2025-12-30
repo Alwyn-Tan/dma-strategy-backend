@@ -15,6 +15,18 @@ conda activate django-5
 
 > 如果你的配置在 `~/.bach_profile` / `~/.zshrc` / `~/.zprofile`，请替换为对应文件。
 
+#### 在非交互环境里运行（Codex/脚本更稳）
+
+有些非交互 shell 下 `conda activate` 不会生效（例如工具执行的单条命令）。这时推荐用 `conda run`：
+
+```bash
+source ~/.bash_profile
+conda run -n django-5 python manage.py runserver
+conda run -n django-5 pytest
+```
+
+> 如果你的环境名是 `django5` 或其他名字，把 `-n django-5` 改成你的实际环境名即可。
+
 ### 1.2 安装依赖
 
 ```bash
@@ -23,7 +35,7 @@ pip install -r requirements.txt
 
 ### 1.3 配置 `.env`
 
-项目会在 `dma_strategy/settings.py` 中自动 `load_dotenv()` 读取 `.env`。
+项目会在 `config/settings.py` 中自动 `load_dotenv()` 读取 `.env`。
 
 MVP 必需项：
 
@@ -41,8 +53,8 @@ LOG_LEVEL=INFO
 ### 1.4 初始化并启动
 
 ```bash
-python manage.py migrate
-python manage.py runserver
+python3 manage.py migrate
+python3 manage.py runserver
 ```
 
 启动后默认地址：`http://127.0.0.1:8000/`
@@ -131,10 +143,10 @@ pytest
 ### 3.2 只跑 services 相关测试
 
 ```bash
-pytest stocks/tests/test_services.py
+pytest strategy_engine/tests/test_services.py
 ```
 
 说明：
 
-- 测试配置在 `pytest.ini`，已设置 `DJANGO_SETTINGS_MODULE=dma_strategy.settings`
+- 测试配置在 `pytest.ini`，已设置 `DJANGO_SETTINGS_MODULE=config.settings`
 - 当前测试重点覆盖 CSV 读取、均线计算、信号生成的基础行为

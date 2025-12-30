@@ -18,12 +18,11 @@ Industry-standard trend/CTA practice improves robustness by changing strategy st
   - `stocks-api` (query params, response contract)
   - `strategy-engine` (signal/position sizing/backtest semantics)
 - Affected code (expected):
-  - `stocks/views.py` (serializers + endpoint wiring)
-  - `stocks/services.py` (`StrategyService` indicators + advanced performance engine)
-  - `stocks/tests/` (unit tests for indicators and advanced backtest behavior)
+  - `api/serializers.py` and `api/views.py` (serializers + endpoint wiring)
+  - `strategy_engine/services.py` (`StrategyService` indicators + advanced performance engine)
+  - `api/tests/` and `strategy_engine/tests/` (unit tests for API + engine)
 
 ## Non-Goals
 - No new data sources; keep local CSV as default source of truth.
 - No portfolio/multi-asset allocation; scope is single-asset backtest per request.
 - No external TA dependencies required (e.g., avoid adding `pandas-ta` unless explicitly approved).
-

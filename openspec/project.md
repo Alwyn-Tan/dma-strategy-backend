@@ -11,10 +11,10 @@ Primary goals:
 
 ## Tech Stack
 - Python 3.10+
-- Django 5.x (`dma_strategy/`)
+- Django 5.x (`config/`)
 - Django REST framework (DRF) for API views/serialization
 - pandas + numpy for time series calculation
-- `python-dotenv` (`load_dotenv()` in `dma_strategy/settings.py`)
+- `python-dotenv` (`load_dotenv()` in `config/settings.py`)
 - Testing: `pytest`, `pytest-django` (`pytest.ini` sets `DJANGO_SETTINGS_MODULE`)
 - CORS: `django-cors-headers`
 
@@ -28,9 +28,11 @@ Optional / “future-ready” components (enabled by env vars / configuration):
 ## Project Conventions
 
 ### Code Style
-- Keep views thin and put domain logic in `stocks/services.py` (`StockDataService`, `StrategyService`).
+- Keep views thin and put domain logic in:
+  - `market_data/services.py` (`StockDataService`)
+  - `strategy_engine/services.py` (`StrategyService`)
 - Prefer explicit types and clear naming (snake_case, type hints like `list[dict]`, `Optional[date]`).
-- Validate query parameters using DRF serializers in `stocks/views.py`:
+- Validate query parameters using DRF serializers in `api/serializers.py`:
   - `StockQuerySerializer` for `/api/stock-data/`
   - `SignalsQuerySerializer` for `/api/signals/`
 - API query params use snake_case (e.g., `short_window`, `long_window`, `include_meta`, `force_refresh`).
@@ -38,8 +40,11 @@ Optional / “future-ready” components (enabled by env vars / configuration):
 
 ### Architecture Patterns
 **Django app layout**
-- Project config: `dma_strategy/` (settings/urls/asgi/wsgi)
-- Core business app: `stocks/` (API + services + tests)
+- Project config: `config/` (settings/urls/asgi/wsgi)
+- API app: `api/` (views/serializers/urls)
+- Domain/DB app: `domain/` (models/migrations/admin)
+- Tooling app: `tooling/` (management commands)
+- Pure Python modules: `market_data/`, `strategy_engine/`
 
 **Data access (MVP)**
 - Local CSV is the primary data source (`settings.DATA_DIR`, default `./data`).
@@ -54,7 +59,7 @@ Optional / “future-ready” components (enabled by env vars / configuration):
 - Refresh is rate-limited via cache key `stock_refresh:<CODE>` using `AUTO_REFRESH_COOLDOWN_SECONDS`.
 
 **API surface**
-- Routes live under `/api/` via `dma_strategy/urls.py` → `stocks/urls.py`.
+- Routes live under `/api/` via `config/urls.py` → `api/urls.py`.
 - Key endpoints:
   - `GET /api/codes/`: list available codes derived from CSV filenames
   - `GET /api/stock-data/`: return OHLCV + MAs; supports optional `include_meta`, `include_performance`
@@ -64,7 +69,7 @@ Optional / “future-ready” components (enabled by env vars / configuration):
 - When `include_meta=true`, `/api/stock-data/` returns `{ data, meta }` and also adds headers like `X-Data-Status`, `X-Data-Range`, `X-Data-Last-Updated`, `X-Data-Refresh`, `X-Data-Refresh-Reason`.
 
 **Configuration (env vars)**
-- Loaded from `.env` via `load_dotenv()` in `dma_strategy/settings.py`.
+- Loaded from `.env` via `load_dotenv()` in `config/settings.py`.
 - Common:
   - `SECRET_KEY`, `DEBUG`, `ALLOWED_HOSTS`
   - `DATA_DIR` (CSV directory), `LOG_LEVEL`
@@ -79,7 +84,7 @@ Optional / “future-ready” components (enabled by env vars / configuration):
 - Prefer deterministic unit tests around:
   - CSV parsing / date filtering (`StockDataService`)
   - MA calculation, signal generation, performance curves (`StrategyService`)
-- API tests use the Django test client (see `stocks/tests/test_api.py`).
+- API tests use the Django test client (see `api/tests/test_api.py`).
 - Avoid network in tests; if touching auto-refresh, mock out `yfinance`.
 
 ### Git Workflow
@@ -120,7 +125,7 @@ API contract convention:
 ## Important Constraints
 - MVP must work without PostgreSQL/Redis/Celery/JWT (local CSV-only path should be the default happy path).
 - `yfinance` refresh requires network access and should be treated as optional in dev/CI.
-- Date handling is day-level (`date`), with project timezone set to `Asia/Hong_Kong` in `dma_strategy/settings.py`.
+- Date handling is day-level (`date`), with project timezone set to `Asia/Hong_Kong` in `config/settings.py`.
 - `DATA_DIR` must be configurable and should be treated as trusted local storage; do not allow arbitrary file reads outside it.
 
 ## External Dependencies

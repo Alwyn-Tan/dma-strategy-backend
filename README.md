@@ -17,8 +17,12 @@
 
 ## 目录结构
 
-- `dma_strategy/`：Django 项目配置（settings/urls/asgi/wsgi）
-- `stocks/`：核心业务 App（models/services/views/migrations）
+- `config/`：Django 项目配置（settings/urls/asgi/wsgi）
+- `api/`：HTTP API（DRF views/serializers/urls）
+- `domain/`：DB 领域模型（models/migrations/admin）
+- `market_data/`：数据来源与落盘（CSV/yfinance/规范化）
+- `strategy_engine/`：策略引擎（指标/信号/回测）
+- `tooling/`：离线命令（management commands）
 - `data/`：MVP 数据目录（CSV 数据源）
 - `results/`、`*.ipynb`：本地结果/实验文件（非服务必需）
 
@@ -39,6 +43,13 @@ conda activate django-5
 ```
 
 > 如果你使用 zsh 且 conda 初始化写在 `~/.zshrc` / `~/.zprofile`，则按你的实际配置 `source` 对应文件即可。
+>
+> 在非交互环境（例如脚本/Codex 执行单条命令）中，推荐用 `conda run`：
+>
+> ```bash
+> source ~/.bash_profile
+> conda run -n django-5 python manage.py runserver
+> ```
 
 ### 3) 安装依赖
 
@@ -61,13 +72,13 @@ pip install -r requirements.txt
 ### 5) 启动服务
 
 ```bash
-python manage.py migrate
-python manage.py runserver
+python3 manage.py migrate
+python3 manage.py runserver
 ```
 
 ## API 概览
 
-项目在 `dma_strategy/urls.py` 中配置了以下路由（默认前缀 `/api`）：
+项目在 `config/urls.py` 中配置了以下路由（默认前缀 `/api`）：
 
 - `GET /api/codes/`：获取可用代码列表（从 `DATA_DIR` 扫描 CSV 文件名）
 - `GET /api/stock-data/`：获取行情与均线数据（支持按请求自动刷新）
@@ -136,7 +147,7 @@ curl "http://127.0.0.1:8000/api/stock-data/?code=AAPL&include_performance=true&s
 pytest
 ```
 
-> 若你新增了 pytest-django 配置，通常需要设置 `DJANGO_SETTINGS_MODULE=dma_strategy.settings` 或添加 `pytest.ini`。
+> 若你新增了 pytest-django 配置，通常需要设置 `DJANGO_SETTINGS_MODULE=config.settings` 或添加 `pytest.ini`。
 
 更完整的启动与测试步骤见：`STARTUP_AND_TESTING.md`。
 

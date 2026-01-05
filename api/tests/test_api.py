@@ -85,7 +85,7 @@ def test_stock_data_include_performance_returns_series(client, settings, tmp_pat
 
 
 @pytest.mark.django_db
-def test_stock_data_include_performance_advanced_includes_assumptions(client, settings, tmp_path):
+def test_stock_data_include_performance_with_toggles_includes_assumptions(client, settings, tmp_path):
     settings.DATA_DIR = tmp_path
     csv = (
         "date,open,high,low,close,volume\n"
@@ -98,20 +98,23 @@ def test_stock_data_include_performance_advanced_includes_assumptions(client, se
     (tmp_path / "AAPL.csv").write_text(csv)
 
     resp = client.get(
-        "/api/stock-data/?code=AAPL&include_performance=true&strategy_mode=advanced"
-        "&ensemble_pairs=2:3&regime_ma_window=2&vol_window=2&target_vol=0.02"
+        "/api/stock-data/?code=AAPL&include_performance=true"
+        "&use_ensemble=true&ensemble_pairs=2:3&ensemble_ma_type=sma"
+        "&use_regime_filter=true&regime_ma_window=2"
+        "&use_vol_targeting=true&target_vol_annual=0.15&trading_days_per_year=252&vol_window=2"
         "&end_date=2025-01-05"
     )
     assert resp.status_code == 200
     body = resp.json()
     assert "performance" in body
     assert "meta" in body and "assumptions" in body["meta"]
-    assert body["meta"]["assumptions"]["strategy"]["strategy_mode"] == "advanced"
+    assert body["meta"]["assumptions"]["strategy"]["features_enabled"]["use_ensemble"] is True
+    assert body["meta"]["assumptions"]["strategy"]["features_enabled"]["use_vol_targeting"] is True
     assert len(body["performance"]["strategy"]) == len(body["data"])
 
 
 @pytest.mark.django_db
-def test_stock_data_advanced_rejects_invalid_ensemble_pairs(client, settings, tmp_path):
+def test_stock_data_rejects_invalid_ensemble_pairs_when_enabled(client, settings, tmp_path):
     settings.DATA_DIR = tmp_path
     csv = (
         "date,open,high,low,close,volume\n"
@@ -123,7 +126,7 @@ def test_stock_data_advanced_rejects_invalid_ensemble_pairs(client, settings, tm
     (tmp_path / "AAPL.csv").write_text(csv)
 
     resp = client.get(
-        "/api/stock-data/?code=AAPL&include_performance=true&strategy_mode=advanced"
-        "&ensemble_pairs=abc&regime_ma_window=2&end_date=2025-01-04"
+        "/api/stock-data/?code=AAPL&include_performance=true&use_ensemble=true"
+        "&ensemble_pairs=abc&end_date=2025-01-04"
     )
     assert resp.status_code == 400

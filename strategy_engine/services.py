@@ -1,3 +1,4 @@
+import math
 from typing import Optional
 
 import pandas as pd
@@ -84,38 +85,18 @@ class StrategyService:
         raise ValueError("ma_type must be 'sma' or 'ema'")
 
     @staticmethod
-    def _advanced_target_exposure(
+    def _ensemble_exposure_close(
         df: pd.DataFrame,
         *,
-        regime_ma_window: int,
-        use_adx_filter: bool,
-        adx_window: int,
-        adx_threshold: float,
         ensemble_pairs: list[tuple[int, int]],
         ensemble_ma_type: str,
-        target_vol: float,
-        vol_window: int,
-        max_leverage: float,
-        min_vol_floor: float,
     ) -> pd.Series:
         if df.empty:
             return pd.Series(dtype=float)
         if "close" not in df.columns:
             raise ValueError("missing close column")
-        if regime_ma_window < 1:
-            raise ValueError("regime_ma_window must be >= 1")
-        if adx_window < 1 or vol_window < 1:
-            raise ValueError("adx_window and vol_window must be >= 1")
-        if adx_threshold < 0 or adx_threshold > 100:
-            raise ValueError("adx_threshold must be within [0, 100]")
-        if max_leverage < 0:
-            raise ValueError("max_leverage must be >= 0")
-        if min_vol_floor <= 0:
-            raise ValueError("min_vol_floor must be > 0")
-        if target_vol < 0:
-            raise ValueError("target_vol must be >= 0")
         if not ensemble_pairs:
-            raise ValueError("ensemble_pairs is required for advanced mode")
+            raise ValueError("ensemble_pairs is required when use_ensemble=true")
 
         close = pd.to_numeric(df["close"], errors="coerce")
 
@@ -128,25 +109,40 @@ class StrategyService:
         signal_df = pd.concat(pair_signals, axis=1)
         valid_counts = signal_df.notna().sum(axis=1).astype(float)
         trend_score = signal_df.sum(axis=1) / valid_counts.where(valid_counts > 0)
-        target_exposure = trend_score.clip(lower=0.0, upper=1.0)
+        return trend_score.clip(lower=0.0, upper=1.0).fillna(0.0)
 
-        regime_ma = close.rolling(window=regime_ma_window, min_periods=regime_ma_window).mean()
-        in_regime = close > regime_ma
-        target_exposure = target_exposure.where(in_regime, 0.0)
+    @staticmethod
+    def _dma_exposure_close_from_signals(
+        df: pd.DataFrame,
+        *,
+        confirm_bars: int,
+        min_cross_gap: int,
+    ) -> pd.Series:
+        if df.empty:
+            return pd.Series(dtype=float)
+        if "ma_short" not in df.columns or "ma_long" not in df.columns:
+            raise ValueError("missing ma_short/ma_long columns; call calculate_moving_averages first")
 
-        if use_adx_filter:
-            adx = StrategyService.calculate_adx(df, window=adx_window)
-            target_exposure = target_exposure.where(adx > float(adx_threshold), 0.0)
+        work = df.copy().reset_index(drop=True)
 
-        if target_vol == 0 or max_leverage == 0:
-            return target_exposure.fillna(0.0)
+        def to_iso(value) -> str:
+            return value.isoformat() if hasattr(value, "isoformat") else str(value)
 
-        atr = StrategyService.calculate_atr(df, window=vol_window)
-        vol = (atr / close).abs()
-        vol_safe = vol.clip(lower=float(min_vol_floor))
-        scale = (float(target_vol) / vol_safe).clip(upper=float(max_leverage))
-        scaled = (target_exposure * scale).clip(lower=0.0)
-        return scaled.fillna(0.0)
+        index_by_date = {to_iso(row["date"]): idx for idx, row in work.iterrows()}
+        signals = StrategyService.generate_signals(
+            work,
+            confirm_bars=confirm_bars,
+            min_cross_gap=min_cross_gap,
+        )
+
+        state = pd.Series([float("nan")] * len(work))
+        for signal in signals:
+            idx = index_by_date.get(signal["date"])
+            if idx is None:
+                continue
+            state.iloc[idx] = 1.0 if signal["signal_type"] == "BUY" else 0.0
+
+        return state.ffill().fillna(0.0)
 
     @staticmethod
     def calculate_moving_averages(df: pd.DataFrame, short_window: int = 5, long_window: int = 20) -> pd.DataFrame:
@@ -255,14 +251,17 @@ class StrategyService:
         allow_fractional: bool = True,
         confirm_bars: int = 0,
         min_cross_gap: int = 0,
-        strategy_mode: str = "basic",
+        use_ensemble: bool = False,
+        ensemble_pairs: Optional[list[tuple[int, int]]] = None,
+        ensemble_ma_type: str = "sma",
+        use_regime_filter: bool = False,
         regime_ma_window: int = 200,
         use_adx_filter: bool = False,
         adx_window: int = 14,
         adx_threshold: float = 20.0,
-        ensemble_pairs: Optional[list[tuple[int, int]]] = None,
-        ensemble_ma_type: str = "sma",
-        target_vol: float = 0.02,
+        use_vol_targeting: bool = False,
+        target_vol_annual: float = 0.15,
+        trading_days_per_year: int = 252,
         vol_window: int = 14,
         max_leverage: float = 1.0,
         min_vol_floor: float = 1e-6,
@@ -273,17 +272,24 @@ class StrategyService:
     ) -> dict[str, list[dict]]:
         if df.empty:
             return {"strategy": [], "benchmark": []}
-        if "open" not in df.columns or "close" not in df.columns:
-            raise ValueError("missing open/close columns")
+        for col in ["date", "open", "close"]:
+            if col not in df.columns:
+                raise ValueError(f"missing {col} column")
         if initial_capital <= 0:
             raise ValueError("initial_capital must be > 0")
         if fee_rate < 0 or slippage_rate < 0:
             raise ValueError("fee_rate and slippage_rate must be >= 0")
-        if strategy_mode not in {"basic", "advanced"}:
-            raise ValueError("strategy_mode must be 'basic' or 'advanced'")
-        if strategy_mode == "basic":
-            if "ma_short" not in df.columns or "ma_long" not in df.columns:
-                raise ValueError("missing ma_short/ma_long columns; call calculate_moving_averages first")
+        if use_adx_filter and not use_regime_filter:
+            raise ValueError("use_adx_filter requires use_regime_filter=true")
+        if use_vol_targeting:
+            if target_vol_annual <= 0:
+                raise ValueError("target_vol_annual must be > 0 when use_vol_targeting=true")
+            if trading_days_per_year <= 0:
+                raise ValueError("trading_days_per_year must be > 0")
+        if max_leverage < 0:
+            raise ValueError("max_leverage must be >= 0")
+        if min_vol_floor <= 0:
+            raise ValueError("min_vol_floor must be > 0")
 
         work = df.copy().reset_index(drop=True)
         work = work.dropna(subset=["date", "open", "close"])
@@ -300,7 +306,19 @@ class StrategyService:
         strategy_series: list[dict] = []
         benchmark_series: list[dict] = []
 
-        if strategy_mode == "basic":
+        all_features_disabled = not (
+            use_ensemble
+            or use_regime_filter
+            or use_adx_filter
+            or use_vol_targeting
+            or use_chandelier_stop
+            or use_vol_stop
+        )
+
+        if all_features_disabled:
+            if "ma_short" not in df.columns or "ma_long" not in df.columns:
+                raise ValueError("missing ma_short/ma_long columns; call calculate_moving_averages first")
+
             index_by_date = {to_iso(row["date"]): idx for idx, row in work.iterrows()}
             signals = StrategyService.generate_signals(
                 work,
@@ -352,25 +370,43 @@ class StrategyService:
 
             return {"strategy": strategy_series, "benchmark": benchmark_series}
 
-        pairs = ensemble_pairs or []
-        exposure_signal = StrategyService._advanced_target_exposure(
-            work,
-            regime_ma_window=regime_ma_window,
-            use_adx_filter=use_adx_filter,
-            adx_window=adx_window,
-            adx_threshold=adx_threshold,
-            ensemble_pairs=pairs,
-            ensemble_ma_type=ensemble_ma_type,
-            target_vol=target_vol,
-            vol_window=vol_window,
-            max_leverage=max_leverage,
-            min_vol_floor=min_vol_floor,
-        )
-        desired_exposure = exposure_signal.shift(1).fillna(0.0)
+        if use_ensemble:
+            pairs = ensemble_pairs or []
+            exposure_close = StrategyService._ensemble_exposure_close(
+                work,
+                ensemble_pairs=pairs,
+                ensemble_ma_type=ensemble_ma_type,
+            )
+        else:
+            exposure_close = StrategyService._dma_exposure_close_from_signals(
+                work,
+                confirm_bars=confirm_bars,
+                min_cross_gap=min_cross_gap,
+            )
 
-        atr_for_stops: Optional[pd.Series] = None
-        if use_chandelier_stop or use_vol_stop:
-            atr_for_stops = StrategyService.calculate_atr(work, window=vol_window)
+        close = pd.to_numeric(work["close"], errors="coerce")
+
+        if use_regime_filter:
+            regime_ma = close.rolling(window=regime_ma_window, min_periods=regime_ma_window).mean()
+            exposure_close = exposure_close.where(close > regime_ma, 0.0)
+
+        if use_adx_filter:
+            adx = StrategyService.calculate_adx(work, window=adx_window)
+            exposure_close = exposure_close.where(adx > float(adx_threshold), 0.0)
+
+        atr: Optional[pd.Series] = None
+        if use_vol_targeting:
+            atr = StrategyService.calculate_atr(work, window=vol_window)
+            atr_pct = (atr / close).abs()
+            target_vol_daily = float(target_vol_annual) / math.sqrt(float(trading_days_per_year))
+            vol_safe = atr_pct.clip(lower=float(min_vol_floor))
+            scale = (target_vol_daily / vol_safe).clip(upper=float(max_leverage))
+            exposure_close = (exposure_close * scale).clip(lower=0.0)
+
+        desired_exposure = exposure_close.shift(1).fillna(0.0)
+
+        if atr is None and (use_chandelier_stop or use_vol_stop):
+            atr = StrategyService.calculate_atr(work, window=vol_window)
 
         entry_price: Optional[float] = None
         high_max: Optional[float] = None
@@ -384,17 +420,18 @@ class StrategyService:
             target = float(desired_exposure.iloc[i]) if i < len(desired_exposure) else 0.0
             target = max(0.0, target)
 
-            if (use_chandelier_stop or use_vol_stop) and shares > 0 and atr_for_stops is not None and i - 1 >= 0:
-                prev_atr = float(atr_for_stops.iloc[i - 1])
+            had_position_before_open = shares > 0
+            stop_level: Optional[float] = None
+            if had_position_before_open and (use_chandelier_stop or use_vol_stop) and atr is not None and i - 1 >= 0:
+                prev_atr = float(atr.iloc[i - 1])
                 if prev_atr == prev_atr and prev_atr > 0:
+                    candidates: list[float] = []
                     if use_chandelier_stop and high_max is not None:
-                        stop_price = high_max - float(chandelier_k) * prev_atr
-                        if low_price <= stop_price:
-                            target = 0.0
+                        candidates.append(high_max - float(chandelier_k) * prev_atr)
                     if use_vol_stop and entry_price is not None:
-                        stop_price = entry_price - float(vol_stop_atr_mult) * prev_atr
-                        if low_price <= stop_price:
-                            target = 0.0
+                        candidates.append(entry_price - float(vol_stop_atr_mult) * prev_atr)
+                    if candidates:
+                        stop_level = max(candidates)
 
             if open_price > 0:
                 equity_at_open = cash + shares * open_price
@@ -433,6 +470,15 @@ class StrategyService:
                             entry_price = None
                             high_max = None
 
+            if had_position_before_open and stop_level is not None and low_price <= stop_level and shares > 0:
+                fill_price = min(open_price, stop_level) if open_price > 0 else stop_level
+                effective_price = fill_price * (1 - slippage_rate)
+                unit_revenue = effective_price * (1 - fee_rate)
+                cash += shares * unit_revenue
+                shares = 0.0
+                entry_price = None
+                high_max = None
+
             if shares > 0:
                 high_max = max(high_max or high_price, high_price)
 
@@ -442,4 +488,3 @@ class StrategyService:
             benchmark_series.append({"date": date_str, "value": (close_price / first_close) if first_close else 0.0})
 
         return {"strategy": strategy_series, "benchmark": benchmark_series}
-

@@ -15,24 +15,29 @@ class StockQuerySerializer(serializers.Serializer):
     gen_confirm_bars = serializers.IntegerField(required=False, default=0, min_value=0, max_value=50)
     gen_min_cross_gap = serializers.IntegerField(required=False, default=0, min_value=0, max_value=365)
 
-    strategy_mode = serializers.ChoiceField(required=False, default="basic", choices=["basic", "advanced"])
-
-    regime_ma_window = serializers.IntegerField(required=False, default=200, min_value=2, max_value=1000)
+    # Strategy feature toggles (all default false)
+    use_ensemble = serializers.BooleanField(required=False, default=False)
+    use_regime_filter = serializers.BooleanField(required=False, default=False)
     use_adx_filter = serializers.BooleanField(required=False, default=False)
+    use_vol_targeting = serializers.BooleanField(required=False, default=False)
+    use_chandelier_stop = serializers.BooleanField(required=False, default=False)
+    use_vol_stop = serializers.BooleanField(required=False, default=False)
+
+    # Module parameters (validated/used only when corresponding toggle is enabled)
+    regime_ma_window = serializers.IntegerField(required=False, default=200, min_value=2, max_value=1000)
     adx_window = serializers.IntegerField(required=False, default=14, min_value=2, max_value=200)
     adx_threshold = serializers.FloatField(required=False, default=20.0, min_value=0.0, max_value=100.0)
 
     ensemble_pairs = serializers.CharField(required=False, default="5:20,10:50,20:100,50:200", allow_blank=True)
     ensemble_ma_type = serializers.ChoiceField(required=False, default="sma", choices=["sma", "ema"])
 
-    target_vol = serializers.FloatField(required=False, default=0.02, min_value=0.0, max_value=1.0)
     vol_window = serializers.IntegerField(required=False, default=14, min_value=2, max_value=200)
+    target_vol_annual = serializers.FloatField(required=False, default=0.15, min_value=0.0, max_value=5.0)
+    trading_days_per_year = serializers.IntegerField(required=False, default=252, min_value=1, max_value=366)
     max_leverage = serializers.FloatField(required=False, default=1.0, min_value=0.0, max_value=10.0)
     min_vol_floor = serializers.FloatField(required=False, default=1e-6, min_value=1e-12, max_value=1.0)
 
-    use_chandelier_stop = serializers.BooleanField(required=False, default=False)
     chandelier_k = serializers.FloatField(required=False, default=3.0, min_value=0.1, max_value=10.0)
-    use_vol_stop = serializers.BooleanField(required=False, default=False)
     vol_stop_atr_mult = serializers.FloatField(required=False, default=2.0, min_value=0.1, max_value=20.0)
 
     @staticmethod
@@ -86,16 +91,27 @@ class StockQuerySerializer(serializers.Serializer):
         if short_window >= long_window:
             raise serializers.ValidationError("short_window must be < long_window")
 
-        if attrs.get("strategy_mode") == "advanced" and attrs.get("include_performance"):
+        if not attrs.get("include_performance"):
+            return attrs
+
+        if attrs.get("use_ensemble"):
             attrs["ensemble_pairs"] = self._parse_ensemble_pairs(attrs.get("ensemble_pairs", ""))
             if not attrs["ensemble_pairs"]:
-                raise serializers.ValidationError("ensemble_pairs is required when strategy_mode=advanced")
+                raise serializers.ValidationError("ensemble_pairs is required when use_ensemble=true")
+        else:
+            attrs["ensemble_pairs"] = []
+
+        if attrs.get("use_adx_filter") and not attrs.get("use_regime_filter"):
+            raise serializers.ValidationError("use_adx_filter requires use_regime_filter=true")
+
+        if attrs.get("use_vol_targeting"):
+            target_vol_annual = float(attrs.get("target_vol_annual") or 0.0)
+            if target_vol_annual <= 0:
+                raise serializers.ValidationError("target_vol_annual must be > 0 when use_vol_targeting=true")
         return attrs
 
 
 class SignalsQuerySerializer(StockQuerySerializer):
-    strategy_mode = serializers.ChoiceField(required=False, default="basic", choices=["basic"])
     filter_signal_type = serializers.ChoiceField(required=False, default="all", choices=["all", "BUY", "SELL"])
     filter_limit = serializers.IntegerField(required=False, allow_null=True, min_value=1, max_value=5000)
     filter_sort = serializers.ChoiceField(required=False, default="desc", choices=["asc", "desc"])
-

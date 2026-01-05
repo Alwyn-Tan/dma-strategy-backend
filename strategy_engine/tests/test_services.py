@@ -123,7 +123,26 @@ def test_calculate_adx_returns_0_to_100():
 
 
 @pytest.mark.django_db
-def test_calculate_performance_advanced_returns_series():
+def test_calculate_performance_default_dma_returns_series():
+    df = pd.DataFrame(
+        {
+            "date": [date(2025, 1, d) for d in range(1, 21)],
+            "open": [float(10 + d) for d in range(20)],
+            "high": [float(10 + d) + 1 for d in range(20)],
+            "low": [float(10 + d) - 1 for d in range(20)],
+            "close": [float(10 + d) for d in range(20)],
+            "volume": [100] * 20,
+        }
+    )
+    df = StrategyService.calculate_moving_averages(df, short_window=2, long_window=3)
+    out = StrategyService.calculate_performance(df)
+    assert "strategy" in out and "benchmark" in out
+    assert len(out["strategy"]) == len(df)
+    assert out["strategy"][0]["value"] == pytest.approx(1.0)
+
+
+@pytest.mark.django_db
+def test_calculate_performance_with_toggles_returns_series():
     df = pd.DataFrame(
         {
             "date": [date(2025, 1, d) for d in range(1, 21)],
@@ -136,15 +155,15 @@ def test_calculate_performance_advanced_returns_series():
     )
     out = StrategyService.calculate_performance(
         df,
-        strategy_mode="advanced",
-        regime_ma_window=3,
-        use_adx_filter=False,
+        use_ensemble=True,
         ensemble_pairs=[(2, 3)],
         ensemble_ma_type="sma",
-        target_vol=0.02,
+        use_regime_filter=True,
+        regime_ma_window=3,
+        use_vol_targeting=True,
+        target_vol_annual=0.15,
+        trading_days_per_year=252,
         vol_window=2,
-        max_leverage=1.0,
-        min_vol_floor=1e-6,
     )
     assert "strategy" in out and "benchmark" in out
     assert len(out["strategy"]) == len(df)
@@ -152,7 +171,7 @@ def test_calculate_performance_advanced_returns_series():
 
 
 @pytest.mark.django_db
-def test_advanced_ensemble_produces_partial_exposure():
+def test_ensemble_produces_partial_exposure():
     df = pd.DataFrame(
         {
             "date": [date(2025, 1, d) for d in range(1, 7)],
@@ -163,18 +182,10 @@ def test_advanced_ensemble_produces_partial_exposure():
             "volume": [100] * 6,
         }
     )
-    exposure = StrategyService._advanced_target_exposure(
+    exposure = StrategyService._ensemble_exposure_close(
         df,
-        regime_ma_window=2,
-        use_adx_filter=False,
-        adx_window=14,
-        adx_threshold=20.0,
         ensemble_pairs=[(1, 2), (3, 5)],
         ensemble_ma_type="sma",
-        target_vol=0.0,
-        vol_window=14,
-        max_leverage=1.0,
-        min_vol_floor=1e-6,
     )
     assert float(exposure.iloc[-1]) == pytest.approx(0.5)
 

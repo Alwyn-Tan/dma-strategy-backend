@@ -1,4 +1,4 @@
-## MODIFIED Requirements
+## ADDED Requirements
 
 ### Requirement: Unified exposure derivation
 The system SHALL derive daily target exposure from DMA and optional modules enabled via explicit toggles, without using a `basic/advanced` mode switch.
@@ -17,4 +17,3 @@ When evaluating OOS segments, the system SHALL allow pre-OOS history only for in
 #### Scenario: Warm-up does not change OOS boundary
 - **WHEN** OOS begins at a boundary date
 - **THEN** the reported OOS series begins at that date (or first available on/after), even if warm-up uses earlier bars
-

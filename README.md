@@ -122,6 +122,21 @@ python3 manage.py runserver
 - 文件命名：优先匹配 `data/<CODE>.csv`，其次匹配 `data/<CODE>_3y.csv`（例如 `data/AAPL_3y.csv`）
 - 必需字段：`date,open,high,low,close,volume`（列名大小写不敏感）
 
+## 离线数据准备：批量下载（yfinance → CSV）
+
+使用 Django management command 批量下载 **日线 OHLCV（adjusted）** 并写入 `DATA_DIR`（默认 `./data`）：
+
+```bash
+# period 模式（默认 3y）：输出如 data/AAPL_3y.csv
+python3 manage.py yfinance_batch_csv --symbols AAPL MSFT --period 3y
+
+# date-range 模式：输出如 data/AAPL_2015-01-01_2025-12-31.csv
+python3 manage.py yfinance_batch_csv --symbols AAPL --start-date 2015-01-01 --end-date 2025-12-31
+
+# 已存在文件默认跳过；使用 --force 覆盖（原子替换）
+python3 manage.py yfinance_batch_csv --symbols AAPL --force
+```
+
 ### 示例请求
 
 获取行情数据（示例参数）：

@@ -7,6 +7,7 @@ attrs==25.3.0
 billiard==4.2.1
 celery==5.5.3
 certifi==2025.8.3
+chardet==5.2.0
 charset-normalizer==3.4.3
 click==8.2.1
 click-didyoumean==0.3.1

@@ -24,6 +24,91 @@ class StockDataService:
         return code
 
     @staticmethod
+    def _sanitize_filename_token(token: str) -> str:
+        value = (token or "").strip()
+        if not value:
+            return ""
+        return re.sub(r"[^A-Za-z0-9._-]+", "_", value)
+
+    @classmethod
+    def build_batch_csv_filename(
+        cls,
+        stock_code: str,
+        *,
+        start_date: Optional[date],
+        end_date: Optional[date],
+        period: str = "3y",
+    ) -> str:
+        code = cls._validate_code(stock_code).upper()
+        if start_date or end_date:
+            start_token = start_date.isoformat() if start_date else "start"
+            end_token = end_date.isoformat() if end_date else "end"
+            return f"{code}_{start_token}_{end_token}.csv"
+
+        period_token = cls._sanitize_filename_token(period) or "3y"
+        return f"{code}_{period_token}.csv"
+
+    @staticmethod
+    def atomic_write_price_csv(csv_path: Path, df: pd.DataFrame) -> None:
+        csv_path = Path(csv_path)
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = csv_path.with_suffix(f"{csv_path.suffix}.tmp")
+        df.to_csv(temp_path, index=False)
+        temp_path.replace(csv_path)
+
+    @classmethod
+    def fetch_yfinance_ohlcv(
+        cls,
+        stock_code: str,
+        *,
+        start_date: Optional[date],
+        end_date: Optional[date],
+        period: str,
+        auto_adjust: bool,
+    ) -> pd.DataFrame:
+        import yfinance as yf
+
+        code = cls._validate_code(stock_code)
+
+        if start_date is None and end_date is None:
+            yf_df = yf.download(
+                code,
+                period=(period or "3y"),
+                interval="1d",
+                auto_adjust=bool(auto_adjust),
+                progress=False,
+            )
+        elif start_date is not None:
+            yf_end = end_date + timedelta(days=1) if end_date else None
+            yf_df = yf.download(
+                code,
+                start=start_date,
+                end=yf_end,
+                interval="1d",
+                auto_adjust=bool(auto_adjust),
+                progress=False,
+            )
+        else:
+            # yfinance does not support end-only range directly; fetch max then filter.
+            yf_df = yf.download(
+                code,
+                period="max",
+                interval="1d",
+                auto_adjust=bool(auto_adjust),
+                progress=False,
+            )
+
+        if yf_df is None or getattr(yf_df, "empty", True):
+            raise ValueError("yfinance returned no data")
+
+        df = cls._normalize_yfinance_df(yf_df)
+        if start_date:
+            df = df[df["date"] >= start_date]
+        if end_date:
+            df = df[df["date"] <= end_date]
+        return df.sort_values("date").reset_index(drop=True)
+
+    @staticmethod
     def _candidate_paths(data_dir: Path, code: str) -> list[Path]:
         candidates = [
             data_dir / f"{code}.csv",
@@ -81,7 +166,7 @@ class StockDataService:
         for col in ["open", "high", "low", "close", "volume"]:
             df = df.rename(columns={normalized[col]: col})
 
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        df["date"] = pd.to_datetime(df["date"], errors="coerce", format="mixed")
         df = df.dropna(subset=["date"])
         df["date"] = df["date"].dt.date
 
@@ -181,7 +266,7 @@ class StockDataService:
         if missing:
             raise ValueError(f"yfinance missing columns: {sorted(missing)}")
 
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        df["date"] = pd.to_datetime(df["date"], errors="coerce", format="mixed")
         df = df.dropna(subset=["date"])
         df["date"] = df["date"].dt.date
 
@@ -361,4 +446,3 @@ class StockDataService:
         if with_meta:
             return df, meta
         return df
-

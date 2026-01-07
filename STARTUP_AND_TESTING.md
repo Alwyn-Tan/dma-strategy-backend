@@ -132,6 +132,21 @@ curl "http://127.0.0.1:8000/api/signals/?code=AAPL&short_window=5&long_window=20
   - `start_date > end_date`
   - `code` 含非法字符（只允许字母/数字/`.`/`_`/`-`）
 
+## 2.5 离线数据准备（批量下载）
+
+项目提供批量下载命令（yfinance → 标准 CSV），写入 `DATA_DIR`（默认 `./data`）：
+
+```bash
+# period 模式（默认 3y）
+python3 manage.py yfinance_batch_csv --symbols AAPL MSFT --period 3y
+
+# date-range 模式（文件名包含显式范围）
+python3 manage.py yfinance_batch_csv --symbols AAPL --start-date 2015-01-01 --end-date 2025-12-31
+
+# 文件已存在默认跳过；使用 --force 覆盖
+python3 manage.py yfinance_batch_csv --symbols AAPL --force
+```
+
 ## 3. 自动化测试（pytest）
 
 ### 3.1 运行全部测试

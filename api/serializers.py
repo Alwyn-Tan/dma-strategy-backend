@@ -32,7 +32,8 @@ class StockQuerySerializer(serializers.Serializer):
     ensemble_ma_type = serializers.ChoiceField(required=False, default="sma", choices=["sma", "ema"])
 
     vol_window = serializers.IntegerField(required=False, default=14, min_value=2, max_value=200)
-    target_vol_annual = serializers.FloatField(required=False, default=0.15, min_value=0.0, max_value=5.0)
+    target_vol_annual = serializers.FloatField(required=False, default=None, allow_null=True, min_value=0.0, max_value=5.0)
+    target_vol = serializers.FloatField(required=False, default=None, allow_null=True, min_value=0.0, max_value=5.0)
     trading_days_per_year = serializers.IntegerField(required=False, default=252, min_value=1, max_value=366)
     max_leverage = serializers.FloatField(required=False, default=1.0, min_value=0.0, max_value=10.0)
     min_vol_floor = serializers.FloatField(required=False, default=1e-6, min_value=1e-12, max_value=1.0)
@@ -105,9 +106,20 @@ class StockQuerySerializer(serializers.Serializer):
             raise serializers.ValidationError("use_adx_filter requires use_regime_filter=true")
 
         if attrs.get("use_vol_targeting"):
-            target_vol_annual = float(attrs.get("target_vol_annual") or 0.0)
-            if target_vol_annual <= 0:
-                raise serializers.ValidationError("target_vol_annual must be > 0 when use_vol_targeting=true")
+            annual_raw = attrs.get("target_vol_annual")
+            daily_raw = attrs.get("target_vol")
+
+            annual_ok = annual_raw is not None and float(annual_raw) > 0
+            daily_ok = daily_raw is not None and float(daily_raw) > 0
+
+            if annual_raw is not None and float(annual_raw) <= 0:
+                raise serializers.ValidationError("target_vol_annual must be > 0 when provided")
+            if daily_raw is not None and float(daily_raw) <= 0:
+                raise serializers.ValidationError("target_vol must be > 0 when provided")
+
+            if not annual_ok and not daily_ok:
+                attrs["target_vol_annual"] = 0.15
+                attrs["target_vol"] = None
         return attrs
 
 

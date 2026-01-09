@@ -147,6 +147,18 @@ python3 manage.py yfinance_batch_csv --symbols AAPL --start-date 2015-01-01 --en
 python3 manage.py yfinance_batch_csv --symbols AAPL --force
 ```
 
+## 2.6 离线研究评估（IS/OOS + ablation + grid search）
+
+运行研究评估命令会把产物写到 `results/research/<run_id>/`，核心汇总表为 `summary.csv`：
+
+```bash
+# 默认 IS=2015-01-01..2020-12-31, OOS=2021-01-01..latest
+python3 manage.py research_eval --symbols AAPL MSFT
+
+# 启用网格搜索（只用 IS 选参，OOS 锁参评估）
+python3 manage.py research_eval --symbols AAPL --grid-search --search-metric sharpe
+```
+
 ## 3. 自动化测试（pytest）
 
 ### 3.1 运行全部测试

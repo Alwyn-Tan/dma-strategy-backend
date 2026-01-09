@@ -13,14 +13,3 @@ When producing annualized metrics (e.g., Sharpe, annualized return), the system 
 #### Scenario: Sharpe annualization uses configured trading days
 - **WHEN** the system computes Sharpe ratio
 - **THEN** it annualizes using `sqrt(trading_days_per_year)`
-
-## ADDED Requirements
-
-### Requirement: OOS warm-up without leakage
-For OOS evaluation, the system SHALL allow pre-OOS bars to be used only for indicator warm-up, while ensuring that decisions and reported OOS metrics use OOS bars only.
-
-#### Scenario: OOS series starts at boundary date
-- **WHEN** OOS start date is `2021-01-01`
-- **THEN** the reported OOS equity series begins on `2021-01-01` (or first available bar on/after it)
-- **AND** the strategy may use earlier bars only to compute indicator state at the boundary
-

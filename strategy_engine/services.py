@@ -6,6 +6,48 @@ import pandas as pd
 
 class StrategyService:
     @staticmethod
+    def resolve_target_vol_daily(
+        *,
+        target_vol_annual: Optional[float],
+        target_vol_daily: Optional[float],
+        trading_days_per_year: int,
+        default_target_vol_annual: float = 0.15,
+    ) -> tuple[float, dict]:
+        if trading_days_per_year <= 0:
+            raise ValueError("trading_days_per_year must be > 0")
+
+        annual_raw = None if target_vol_annual is None else float(target_vol_annual)
+        daily_raw = None if target_vol_daily is None else float(target_vol_daily)
+
+        annual_provided = annual_raw is not None and annual_raw > 0
+        daily_provided = daily_raw is not None and daily_raw > 0
+
+        if annual_provided:
+            daily = annual_raw / math.sqrt(float(trading_days_per_year))
+            source = "annual"
+            annual_effective = annual_raw
+        elif daily_provided:
+            daily = daily_raw
+            source = "daily"
+            annual_effective = daily_raw * math.sqrt(float(trading_days_per_year))
+        else:
+            annual_effective = float(default_target_vol_annual)
+            daily = annual_effective / math.sqrt(float(trading_days_per_year))
+            source = "default_annual"
+
+        if daily <= 0:
+            raise ValueError("target_vol must be > 0 when use_vol_targeting=true")
+
+        return daily, {
+            "source": source,
+            "target_vol_annual_effective": annual_effective,
+            "target_vol_daily_effective": daily,
+            "target_vol_annual_input": annual_raw,
+            "target_vol_daily_input": daily_raw,
+            "trading_days_per_year": int(trading_days_per_year),
+        }
+
+    @staticmethod
     def _ema(series: pd.Series, *, window: int) -> pd.Series:
         if window < 1:
             raise ValueError("window must be >= 1")
@@ -260,7 +302,8 @@ class StrategyService:
         adx_window: int = 14,
         adx_threshold: float = 20.0,
         use_vol_targeting: bool = False,
-        target_vol_annual: float = 0.15,
+        target_vol_annual: Optional[float] = 0.15,
+        target_vol_daily: Optional[float] = None,
         trading_days_per_year: int = 252,
         vol_window: int = 14,
         max_leverage: float = 1.0,
@@ -269,7 +312,8 @@ class StrategyService:
         chandelier_k: float = 3.0,
         use_vol_stop: bool = False,
         vol_stop_atr_mult: float = 2.0,
-    ) -> dict[str, list[dict]]:
+        return_details: bool = False,
+    ) -> dict:
         if df.empty:
             return {"strategy": [], "benchmark": []}
         for col in ["date", "open", "close"]:
@@ -281,11 +325,8 @@ class StrategyService:
             raise ValueError("fee_rate and slippage_rate must be >= 0")
         if use_adx_filter and not use_regime_filter:
             raise ValueError("use_adx_filter requires use_regime_filter=true")
-        if use_vol_targeting:
-            if target_vol_annual <= 0:
-                raise ValueError("target_vol_annual must be > 0 when use_vol_targeting=true")
-            if trading_days_per_year <= 0:
-                raise ValueError("trading_days_per_year must be > 0")
+        if trading_days_per_year <= 0:
+            raise ValueError("trading_days_per_year must be > 0")
         if max_leverage < 0:
             raise ValueError("max_leverage must be >= 0")
         if min_vol_floor <= 0:
@@ -305,6 +346,90 @@ class StrategyService:
 
         strategy_series: list[dict] = []
         benchmark_series: list[dict] = []
+
+        fills: list[dict] = []
+        closed_trades: list[dict] = []
+        daily_details: list[dict] = []
+        trade_open = False
+        trade_entry_date: Optional[str] = None
+        trade_cash_flow = 0.0
+        trade_buy_cost = 0.0
+        trade_sell_proceeds = 0.0
+        trade_fill_count = 0
+
+        def maybe_close_trade(date_str: str) -> None:
+            nonlocal trade_open, trade_entry_date, trade_cash_flow, trade_buy_cost, trade_sell_proceeds, trade_fill_count
+            if not trade_open:
+                return
+            if shares > 0:
+                return
+            pnl = float(trade_cash_flow)
+            invested = float(trade_buy_cost)
+            pnl_pct = (pnl / invested) if invested > 0 else 0.0
+            closed_trades.append(
+                {
+                    "entry_date": trade_entry_date,
+                    "exit_date": date_str,
+                    "pnl": pnl,
+                    "pnl_pct": pnl_pct,
+                    "buy_cost": invested,
+                    "sell_proceeds": float(trade_sell_proceeds),
+                    "fills": int(trade_fill_count),
+                }
+            )
+            trade_open = False
+            trade_entry_date = None
+            trade_cash_flow = 0.0
+            trade_buy_cost = 0.0
+            trade_sell_proceeds = 0.0
+            trade_fill_count = 0
+
+        def record_fill(
+            *,
+            date_str: str,
+            side: str,
+            quantity: float,
+            open_price: float,
+            fill_price: float,
+            fee_rate: float,
+            reason: str,
+        ) -> None:
+            nonlocal trade_open, trade_entry_date, trade_cash_flow, trade_buy_cost, trade_sell_proceeds, trade_fill_count
+
+            qty = float(quantity)
+            if qty <= 0:
+                return
+
+            notional = qty * float(fill_price)
+            fee = notional * float(fee_rate)
+            slippage_amt = qty * abs(float(fill_price) - float(open_price))
+
+            if side == "BUY":
+                cash_delta = -(notional + fee)
+            else:
+                cash_delta = notional - fee
+
+            fills.append(
+                {
+                    "date": date_str,
+                    "side": side,
+                    "quantity": qty,
+                    "open_price": float(open_price),
+                    "fill_price": float(fill_price),
+                    "notional": float(notional),
+                    "fee": float(fee),
+                    "slippage": float(slippage_amt),
+                    "cash_delta": float(cash_delta),
+                    "reason": reason,
+                }
+            )
+
+            trade_fill_count += 1
+            trade_cash_flow += cash_delta
+            if side == "BUY":
+                trade_buy_cost += -cash_delta
+            else:
+                trade_sell_proceeds += cash_delta
 
         all_features_disabled = not (
             use_ensemble
@@ -342,6 +467,7 @@ class StrategyService:
                 action = actions_by_index.get(i)
                 open_price = float(row["open"])
                 close_price = float(row["close"])
+                date_str = to_iso(row["date"])
 
                 if action == "BUY" and shares <= 0 and cash > 0 and open_price > 0:
                     effective_price = open_price * (1 + slippage_rate)
@@ -352,23 +478,70 @@ class StrategyService:
                         else:
                             buy_shares = int(cash / unit_cost)
                         if buy_shares > 0:
+                            if not trade_open:
+                                trade_open = True
+                                trade_entry_date = date_str
+                                trade_cash_flow = 0.0
+                                trade_buy_cost = 0.0
+                                trade_sell_proceeds = 0.0
+                                trade_fill_count = 0
                             cash -= buy_shares * unit_cost
                             shares += buy_shares
+                            record_fill(
+                                date_str=date_str,
+                                side="BUY",
+                                quantity=float(buy_shares),
+                                open_price=open_price,
+                                fill_price=effective_price,
+                                fee_rate=fee_rate,
+                                reason="signal",
+                            )
 
                 elif action == "SELL" and shares > 0 and open_price > 0:
                     effective_price = open_price * (1 - slippage_rate)
                     unit_revenue = effective_price * (1 - fee_rate)
+                    sell_shares = float(shares)
                     cash += shares * unit_revenue
                     shares = 0.0
+                    record_fill(
+                        date_str=date_str,
+                        side="SELL",
+                        quantity=sell_shares,
+                        open_price=open_price,
+                        fill_price=effective_price,
+                        fee_rate=fee_rate,
+                        reason="signal",
+                    )
+                    maybe_close_trade(date_str)
 
                 equity = cash + shares * close_price
-                date_str = to_iso(row["date"])
                 strategy_series.append({"date": date_str, "value": equity / initial_capital})
                 benchmark_series.append(
                     {"date": date_str, "value": (close_price / first_close) if first_close else 0.0}
                 )
+                if return_details:
+                    exposure = 0.0 if equity <= 0 else (shares * close_price) / equity
+                    daily_details.append(
+                        {
+                            "date": date_str,
+                            "equity": float(equity),
+                            "value": float(equity / initial_capital),
+                            "benchmark_value": float((close_price / first_close) if first_close else 0.0),
+                            "exposure": float(exposure),
+                            "target_exposure": float(1.0 if shares > 0 else 0.0),
+                            "cash": float(cash),
+                            "shares": float(shares),
+                        }
+                    )
 
-            return {"strategy": strategy_series, "benchmark": benchmark_series}
+            out: dict = {"strategy": strategy_series, "benchmark": benchmark_series}
+            if return_details:
+                out["details"] = {
+                    "daily": daily_details,
+                    "fills": fills,
+                    "closed_trades": closed_trades,
+                }
+            return out
 
         if use_ensemble:
             pairs = ensemble_pairs or []
@@ -395,12 +568,18 @@ class StrategyService:
             exposure_close = exposure_close.where(adx > float(adx_threshold), 0.0)
 
         atr: Optional[pd.Series] = None
+        vol_target_info: Optional[dict] = None
+        target_vol_daily_effective: Optional[float] = None
         if use_vol_targeting:
+            target_vol_daily_effective, vol_target_info = StrategyService.resolve_target_vol_daily(
+                target_vol_annual=target_vol_annual,
+                target_vol_daily=target_vol_daily,
+                trading_days_per_year=trading_days_per_year,
+            )
             atr = StrategyService.calculate_atr(work, window=vol_window)
             atr_pct = (atr / close).abs()
-            target_vol_daily = float(target_vol_annual) / math.sqrt(float(trading_days_per_year))
             vol_safe = atr_pct.clip(lower=float(min_vol_floor))
-            scale = (target_vol_daily / vol_safe).clip(upper=float(max_leverage))
+            scale = (float(target_vol_daily_effective) / vol_safe).clip(upper=float(max_leverage))
             exposure_close = (exposure_close * scale).clip(lower=0.0)
 
         desired_exposure = exposure_close.shift(1).fillna(0.0)
@@ -416,6 +595,7 @@ class StrategyService:
             close_price = float(row["close"])
             high_price = float(row.get("high", close_price))
             low_price = float(row.get("low", close_price))
+            date_str = to_iso(row["date"])
 
             target = float(desired_exposure.iloc[i]) if i < len(desired_exposure) else 0.0
             target = max(0.0, target)
@@ -449,8 +629,24 @@ class StrategyService:
                         max_affordable = cash / unit_cost
                         buy_shares = min(desired_buy_shares, max_affordable)
                         if buy_shares > 0:
+                            if not trade_open and shares <= 0:
+                                trade_open = True
+                                trade_entry_date = date_str
+                                trade_cash_flow = 0.0
+                                trade_buy_cost = 0.0
+                                trade_sell_proceeds = 0.0
+                                trade_fill_count = 0
                             cash -= buy_shares * unit_cost
                             shares += buy_shares
+                            record_fill(
+                                date_str=date_str,
+                                side="BUY",
+                                quantity=float(buy_shares),
+                                open_price=open_price,
+                                fill_price=effective_price,
+                                fee_rate=fee_rate,
+                                reason="rebalance",
+                            )
                             if entry_price is None and shares > 0:
                                 entry_price = effective_price
                                 high_max = high_price
@@ -465,17 +661,38 @@ class StrategyService:
                     if sell_shares > 0:
                         cash += sell_shares * unit_revenue
                         shares -= sell_shares
+                        record_fill(
+                            date_str=date_str,
+                            side="SELL",
+                            quantity=float(sell_shares),
+                            open_price=open_price,
+                            fill_price=effective_price,
+                            fee_rate=fee_rate,
+                            reason="rebalance",
+                        )
                         if shares <= 0:
                             shares = 0.0
                             entry_price = None
                             high_max = None
+                            maybe_close_trade(date_str)
 
             if had_position_before_open and stop_level is not None and low_price <= stop_level and shares > 0:
                 fill_price = min(open_price, stop_level) if open_price > 0 else stop_level
                 effective_price = fill_price * (1 - slippage_rate)
                 unit_revenue = effective_price * (1 - fee_rate)
+                sell_shares = float(shares)
                 cash += shares * unit_revenue
                 shares = 0.0
+                record_fill(
+                    date_str=date_str,
+                    side="SELL",
+                    quantity=sell_shares,
+                    open_price=float(open_price if open_price > 0 else fill_price),
+                    fill_price=effective_price,
+                    fee_rate=fee_rate,
+                    reason="stop",
+                )
+                maybe_close_trade(date_str)
                 entry_price = None
                 high_max = None
 
@@ -483,8 +700,30 @@ class StrategyService:
                 high_max = max(high_max or high_price, high_price)
 
             equity = cash + shares * close_price
-            date_str = to_iso(row["date"])
             strategy_series.append({"date": date_str, "value": equity / initial_capital})
             benchmark_series.append({"date": date_str, "value": (close_price / first_close) if first_close else 0.0})
 
-        return {"strategy": strategy_series, "benchmark": benchmark_series}
+            if return_details:
+                exposure = 0.0 if equity <= 0 else (shares * close_price) / equity
+                daily_details.append(
+                    {
+                        "date": date_str,
+                        "equity": float(equity),
+                        "value": float(equity / initial_capital),
+                        "benchmark_value": float((close_price / first_close) if first_close else 0.0),
+                        "exposure": float(exposure),
+                        "target_exposure": float(target),
+                        "cash": float(cash),
+                        "shares": float(shares),
+                    }
+                )
+
+        out: dict = {"strategy": strategy_series, "benchmark": benchmark_series}
+        if return_details:
+            out["details"] = {
+                "daily": daily_details,
+                "fills": fills,
+                "closed_trades": closed_trades,
+                "vol_targeting": vol_target_info,
+            }
+        return out

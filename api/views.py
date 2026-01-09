@@ -72,7 +72,8 @@ class StockDataView(APIView):
                     "adx_window": params.validated_data.get("adx_window", 14),
                     "adx_threshold": params.validated_data.get("adx_threshold", 20.0),
                     "use_vol_targeting": use_vol_targeting,
-                    "target_vol_annual": params.validated_data.get("target_vol_annual", 0.15),
+                    "target_vol_annual": params.validated_data.get("target_vol_annual"),
+                    "target_vol_daily": params.validated_data.get("target_vol"),
                     "trading_days_per_year": params.validated_data.get("trading_days_per_year", 252),
                     "vol_window": params.validated_data.get("vol_window", 14),
                     "max_leverage": params.validated_data.get("max_leverage", 1.0),
@@ -131,9 +132,18 @@ class StockDataView(APIView):
                     }
 
                 if use_vol_targeting:
+                    target_vol_daily_effective, vol_targeting_info = StrategyService.resolve_target_vol_daily(
+                        target_vol_annual=params.validated_data.get("target_vol_annual"),
+                        target_vol_daily=params.validated_data.get("target_vol"),
+                        trading_days_per_year=params.validated_data.get("trading_days_per_year", 252),
+                    )
                     strategy_assumptions["vol_targeting"] = {
-                        "target_vol_annual": params.validated_data.get("target_vol_annual", 0.15),
-                        "trading_days_per_year": params.validated_data.get("trading_days_per_year", 252),
+                        "target_vol_annual": vol_targeting_info.get("target_vol_annual_effective"),
+                        "target_vol_annual_input": vol_targeting_info.get("target_vol_annual_input"),
+                        "target_vol": vol_targeting_info.get("target_vol_daily_input"),
+                        "target_vol_daily_effective": target_vol_daily_effective,
+                        "source": vol_targeting_info.get("source"),
+                        "trading_days_per_year": vol_targeting_info.get("trading_days_per_year"),
                         "vol_window": params.validated_data.get("vol_window", 14),
                         "max_leverage": params.validated_data.get("max_leverage", 1.0),
                         "min_vol_floor": params.validated_data.get("min_vol_floor", 1e-6),

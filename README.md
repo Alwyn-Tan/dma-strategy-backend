@@ -137,6 +137,18 @@ python3 manage.py yfinance_batch_csv --symbols AAPL --start-date 2015-01-01 --en
 python3 manage.py yfinance_batch_csv --symbols AAPL --force
 ```
 
+## 离线研究评估：IS/OOS + ablation + grid search
+
+项目提供研究评估命令 `research_eval`，用于对一组标的做固定 IS/OOS 拆分评估，并输出可复现产物到 `results/research/<run_id>/`（包含 `summary.csv`、逐标的/逐 variant 的 series 与 trades 等）。
+
+```bash
+# 默认 IS=2015-01-01..2020-12-31, OOS=2021-01-01..latest
+python3 manage.py research_eval --symbols AAPL MSFT
+
+# 启用网格搜索（只用 IS 选参，OOS 锁参评估）
+python3 manage.py research_eval --symbols AAPL --grid-search --search-metric sharpe
+```
+
 ### 示例请求
 
 获取行情数据（示例参数）：

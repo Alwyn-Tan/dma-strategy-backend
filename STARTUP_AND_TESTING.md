@@ -151,6 +151,8 @@ python3 manage.py yfinance_batch_csv --symbols AAPL --force
 
 运行研究评估命令会把产物写到 `results/research/<run_id>/`，核心汇总表为 `summary.csv`：
 
+回测指标口径说明见：`docs/backtest-metrics.md`。
+
 ```bash
 # 默认 IS=2015-01-01..2020-12-31, OOS=2021-01-01..latest
 python3 manage.py research_eval --symbols AAPL MSFT
@@ -158,6 +160,12 @@ python3 manage.py research_eval --symbols AAPL MSFT
 # 启用网格搜索（只用 IS 选参，OOS 锁参评估）
 python3 manage.py research_eval --symbols AAPL --grid-search --search-metric sharpe
 ```
+
+注意：
+
+- 如果你下载的数据只覆盖最近几年（例如 `yfinance_batch_csv --period 3y` 生成的 `*_3y.csv`），默认 IS 段 `2015-01-01..2020-12-31` 可能没有数据；`research_eval` 会直接失败，并提示 CSV 覆盖区间与下一步操作。
+- 解决方式：下载更长历史（推荐）或显式传参调整拆分窗口（`--is-start/--is-end/--oos-start/--oos-end`）。
+- 如需只跑 OOS 或只跑 IS，可分别使用 `--allow-empty-is` / `--allow-empty-oos`（默认关闭）。
 
 ## 3. 自动化测试（pytest）
 

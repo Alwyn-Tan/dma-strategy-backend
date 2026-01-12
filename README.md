@@ -141,6 +141,8 @@ python3 manage.py yfinance_batch_csv --symbols AAPL --force
 
 项目提供研究评估命令 `research_eval`，用于对一组标的做固定 IS/OOS 拆分评估，并输出可复现产物到 `results/research/<run_id>/`（包含 `summary.csv`、逐标的/逐 variant 的 series 与 trades 等）。
 
+回测指标口径说明见：`docs/backtest-metrics.md`。
+
 ```bash
 # 默认 IS=2015-01-01..2020-12-31, OOS=2021-01-01..latest
 python3 manage.py research_eval --symbols AAPL MSFT
@@ -148,6 +150,12 @@ python3 manage.py research_eval --symbols AAPL MSFT
 # 启用网格搜索（只用 IS 选参，OOS 锁参评估）
 python3 manage.py research_eval --symbols AAPL --grid-search --search-metric sharpe
 ```
+
+注意：
+
+- 如果你的 CSV 只覆盖最近几年（例如 `*_3y.csv`），默认 IS 段可能没有数据；`research_eval` 会直接失败，错误信息里会提示 CSV 覆盖区间与下一步操作。
+- 想跑默认 IS/OOS（2015..2020 / 2021..latest），请先用 `yfinance_batch_csv --start-date 2015-01-01` 下载更长历史；或通过 `--is-start/--is-end/--oos-start` 把拆分窗口调整到你的数据覆盖范围内。
+- 如需只跑 OOS 或只跑 IS，可分别使用 `--allow-empty-is` / `--allow-empty-oos`（默认关闭）。
 
 ### 示例请求
 

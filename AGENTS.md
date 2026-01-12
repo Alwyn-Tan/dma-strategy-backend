@@ -28,3 +28,11 @@ This repo is developed and run via **Anaconda/Conda** (see `STARTUP_AND_TESTING.
   - `conda run -n django-5 python manage.py ...`
   - `conda run -n django-5 pytest ...` (or `conda run -n django-5 python -m pytest ...`)
 - If `conda` is not available in the current execution environment, do not “work around” by installing deps into the system interpreter; instead, ask the user to run the documented Conda commands locally (or confirm an alternative).
+
+## Code Documentation (Docstrings)
+
+This project uses **PEP 257 + Google-style docstrings** as the unified documentation standard.
+
+- Every new/modified function, method, and class SHOULD include a docstring (at minimum a 1-line summary).
+- Use Google sections when applicable: `Args:`, `Returns:`, `Raises:`, `Notes:` (do not repeat types already covered by type hints).
+- Prefer inline comments (`# ...`) only to explain *why* (avoid restating *what* the code does).

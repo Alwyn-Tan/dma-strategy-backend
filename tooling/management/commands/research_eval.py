@@ -1,3 +1,11 @@
+"""Research evaluation management command.
+
+This module implements the `research_eval` Django management command. It runs a
+fixed IS/OOS evaluation (optionally with IS-only grid search) across one or more
+symbols and strategy variants, and writes reproducible artifacts under
+`results/research/<run_id>/`.
+"""
+
 from __future__ import annotations
 
 import csv
@@ -16,6 +24,16 @@ from strategy_engine.services import StrategyService
 
 
 class Command(BaseCommand):
+    """Run IS/OOS research evaluation and write artifacts.
+
+    The command:
+    1) loads local OHLCV CSV data via `StockDataService`,
+    2) runs the strategy engine via `StrategyService.calculate_performance(...)`,
+    3) computes IS/OOS metrics via `strategy_engine.research_eval.summarize_segment`,
+    4) writes `config.json`, `summary.csv`, and per-variant artifacts under
+       `series/`, `fills/`, and `trades/`.
+    """
+
     help = "Run research evaluations (IS/OOS + ablations + optional grid search) and write artifacts to results/research/<run_id>/."
 
     DEFAULT_IS_START = date(2015, 1, 1)
@@ -30,16 +48,37 @@ class Command(BaseCommand):
 
     @staticmethod
     def _parse_ymd(value: Optional[str], *, field_name: str) -> Optional[date]:
+        """Parse an optional YYYY-MM-DD date string.
+
+        Args:
+            value: Date string or empty/None.
+            field_name: CLI field name for error messages.
+        Returns:
+            A `date` when provided; otherwise `None`.
+        Raises:
+            CommandError: If the input is non-empty but not in YYYY-MM-DD format.
+        """
         raw = (value or "").strip()
         if not raw:
             return None
         parsed = parse_date(raw)
+
         if parsed is None:
             raise CommandError(f"{field_name} must be YYYY-MM-DD")
         return parsed
 
     @staticmethod
     def _parse_int_csv(value: str, *, field_name: str) -> list[int]:
+        """Parse a comma-separated list of integers.
+
+        Args:
+            value: Comma-separated string, e.g. "5,10,20".
+            field_name: CLI field name for error messages.
+        Returns:
+            Parsed integers; returns an empty list for empty input.
+        Raises:
+            CommandError: If any token cannot be parsed as an integer.
+        """
         raw = (value or "").strip()
         if not raw:
             return []
@@ -56,6 +95,13 @@ class Command(BaseCommand):
 
     @staticmethod
     def _parse_variants(value: Optional[str]) -> list[str]:
+        """Parse a comma-separated list of variant ids.
+
+        Args:
+            value: Comma-separated variant ids (e.g. "dma_baseline,advanced_full").
+        Returns:
+            Variant ids with whitespace stripped; returns an empty list for empty input.
+        """
         raw = (value or "").strip()
         if not raw:
             return []
@@ -63,6 +109,12 @@ class Command(BaseCommand):
 
     @staticmethod
     def _write_rows_csv(path: Path, rows: list[dict]) -> None:
+        """Write a list of dict rows to a CSV file.
+
+        Args:
+            path: Output CSV path (parent dirs will be created).
+            rows: Rows to write. If empty, writes an empty file.
+        """
         path.parent.mkdir(parents=True, exist_ok=True)
         if not rows:
             path.write_text("")
@@ -74,6 +126,7 @@ class Command(BaseCommand):
             w.writerows(rows)
 
     def add_arguments(self, parser):
+        """Register CLI arguments for `manage.py research_eval`."""
         parser.add_argument(
             "--symbols",
             nargs="+",
@@ -96,6 +149,16 @@ class Command(BaseCommand):
         parser.add_argument("--is-end", default=self.DEFAULT_IS_END.isoformat())
         parser.add_argument("--oos-start", default=self.DEFAULT_OOS_START.isoformat())
         parser.add_argument("--oos-end", default=None, help="Optional YYYY-MM-DD end for OOS.")
+        parser.add_argument(
+            "--allow-empty-is",
+            action="store_true",
+            help="Allow runs where the IS segment contains zero bars (metrics will be NaN; grid search is not allowed).",
+        )
+        parser.add_argument(
+            "--allow-empty-oos",
+            action="store_true",
+            help="Allow runs where the OOS segment contains zero bars (metrics will be NaN).",
+        )
 
         parser.add_argument(
             "--variants",
@@ -134,6 +197,20 @@ class Command(BaseCommand):
         parser.add_argument("--vol-stop-atr-mult", default=2.0, type=float)
 
     def handle(self, *args, **options):
+        """Run research evaluation and write results to disk.
+
+        This command is intentionally fail-fast: by default it requires both IS and
+        OOS segments to have at least one bar. Use `--allow-empty-is` to run OOS
+        only, and `--allow-empty-oos` to run IS only (both default to off). Grid
+        search is allowed only when IS has at least one bar.
+
+        Side effects:
+            Writes artifacts under `results/research/<run_id>/` (or `--output-dir`).
+
+        Raises:
+            CommandError: For invalid date ranges, missing data coverage, or failed
+                CSV loading.
+        """
         symbols: list[str] = list(options["symbols"] or [])
         variants = self._parse_variants(options.get("variants")) or list(self.DEFAULT_VARIANTS)
 
@@ -192,6 +269,8 @@ class Command(BaseCommand):
         vol_stop_atr_mult = float(options.get("vol_stop_atr_mult") or 2.0)
 
         use_exits: bool = bool(options.get("use_exits", False))
+        allow_empty_is: bool = bool(options.get("allow_empty_is", False))
+        allow_empty_oos: bool = bool(options.get("allow_empty_oos", False))
 
         # Keep parsing logic consistent with StockQuerySerializer.
         parsed_pairs: list[tuple[int, int]] = []
@@ -309,20 +388,72 @@ class Command(BaseCommand):
                 if df.empty:
                     raise ValueError("CSV contains no rows")
             except Exception as exc:
-                failures.append((symbol, str(exc)))
-                self.stderr.write(f"[FAIL] {symbol}: {exc}")
-                continue
+                raise CommandError(
+                    f"{symbol}: failed to load CSV ({exc}).\n"
+                    f"Next:\n"
+                    f"- Put a normalized CSV under {data_dir} with columns date,open,high,low,close,volume\n"
+                    f"- Or download via: python manage.py yfinance_batch_csv --symbols {symbol} --start-date {is_start.isoformat()} --force\n"
+                    f"- Or point to a different folder via: --data-dir <path>"
+                ) from exc
 
-            df = df[(df["date"] >= is_start) & (df["date"] <= (oos_end or df["date"].max()))].reset_index(drop=True)
+            csv_min = df["date"].min()
+            csv_max = df["date"].max()
+            effective_end = oos_end or csv_max  # If no explicit OOS end, evaluate up to the last available bar.
+
+            df = df[(df["date"] >= is_start) & (df["date"] <= effective_end)].reset_index(drop=True)
             if df.empty:
-                failures.append((code, "no rows in requested IS/OOS range"))
-                self.stderr.write(f"[FAIL] {code}: no rows in requested IS/OOS range")
-                continue
+                raise CommandError(
+                    f"{code}: no rows in requested range {is_start.isoformat()}..{effective_end.isoformat()} "
+                    f"(CSV range {csv_min.isoformat()}..{csv_max.isoformat()}).\n"
+                    f"Next: download/prepare data covering that range, or adjust --is-start/--is-end/--oos-start/--oos-end."
+                )
+
+            has_is = bool(((df["date"] >= is_start) & (df["date"] <= is_end)).any())
+            has_oos = bool(((df["date"] >= oos_start) & (df["date"] <= effective_end)).any())
+
+            if grid_search and not has_is:
+                raise CommandError(
+                    f"{code}: grid search requires IS data, but IS has zero bars in {is_start.isoformat()}..{is_end.isoformat()} "
+                    f"(CSV range {csv_min.isoformat()}..{csv_max.isoformat()}).\n"
+                    f"Next:\n"
+                    f"- Download longer history: python manage.py yfinance_batch_csv --symbols {code} --start-date {is_start.isoformat()} --force\n"
+                    f"- Or adjust split: --is-start/--is-end (keep is_end < oos_start)\n"
+                    f"- Or disable --grid-search"
+                )
+
+            if not has_is and not allow_empty_is:
+                raise CommandError(
+                    f"{code}: IS segment has zero bars in {is_start.isoformat()}..{is_end.isoformat()} "
+                    f"(CSV range {csv_min.isoformat()}..{csv_max.isoformat()}).\n"
+                    f"Next:\n"
+                    f"- Download longer history: python manage.py yfinance_batch_csv --symbols {code} --start-date {is_start.isoformat()} --force\n"
+                    f"- Or adjust split: --is-start/--is-end/--oos-start/--oos-end (keep is_end < oos_start)\n"
+                    f"- If you intentionally want to run OOS only: pass --allow-empty-is"
+                )
+
+            if not has_oos and not allow_empty_oos:
+                raise CommandError(
+                    f"{code}: OOS segment has zero bars in {oos_start.isoformat()}..{effective_end.isoformat()} "
+                    f"(CSV range {csv_min.isoformat()}..{csv_max.isoformat()}).\n"
+                    f"Next:\n"
+                    f"- Prepare newer data (so CSV max >= oos_start)\n"
+                    f"- Or adjust split: --oos-start/--oos-end\n"
+                    f"- If you intentionally want to run IS only: pass --allow-empty-oos"
+                )
 
             for variant in variants:
                 variant_kwargs = dict(variant_defs[variant])
 
                 def run_one(short_window: int, long_window: int) -> dict:
+                    """Run a single backtest for this symbol/variant and return full details.
+
+                    Args:
+                        short_window: Short moving-average window.
+                        long_window: Long moving-average window.
+                    Returns:
+                        Output from `StrategyService.calculate_performance(...)`, including
+                        `details` when `return_details=True`.
+                    """
                     df_ma = StrategyService.calculate_moving_averages(df, short_window=short_window, long_window=long_window)
                     return StrategyService.calculate_performance(
                         df_ma,

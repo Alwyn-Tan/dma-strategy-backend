@@ -3,7 +3,7 @@ from datetime import date
 import pandas as pd
 import pytest
 
-from strategy_engine.research_eval import (
+from strategy_engine.backtest_metrics import (
     compute_max_drawdown,
     slice_daily_records,
     summarize_segment,
@@ -80,4 +80,3 @@ def test_trade_extraction_and_metrics_smoke():
     )
     assert metrics["trades"] >= 1
     assert 0.0 <= metrics["win_rate"] <= 1.0
-

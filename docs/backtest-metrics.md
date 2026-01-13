@@ -1,8 +1,8 @@
-# 回测指标说明文档 (Research Evaluation Metrics)
+# 回测指标说明文档 (Backtesting Metrics)
 
-本文档旨在定义 `research_eval` 模块（及产出物 `results/research/<run_id>/summary.csv`）中核心指标的计算逻辑、数学公式及业务含义。
+本文档旨在定义 `backtesting` 命令产出物（尤其是 `results/backtesting/<run_id>/summary.csv`）中核心指标的计算逻辑、数学公式及业务含义。
 
-所有计算逻辑均与 `strategy_engine/research_eval.py` 的代码实现保持一致。
+所有计算逻辑均与 `strategy_engine/backtest_metrics.py` 的代码实现保持一致。
 
 ## 1. 数据源与预处理
 

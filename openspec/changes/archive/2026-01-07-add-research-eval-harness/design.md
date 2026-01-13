@@ -1,7 +1,7 @@
 # Design: Research evaluation harness
 
 ## Entrypoint
-- Implement as a Django management command (e.g., `python manage.py research_eval ...`).
+- Implement as a Django management command (e.g., `python manage.py backtesting ...`).
 
 ## Data Inputs
 - Source: local CSVs under `settings.DATA_DIR` (prepared by the data pipeline).
@@ -44,7 +44,7 @@ If both are provided:
 - Average exposure (mean of target exposure; advanced mode)
 
 ## Outputs (reproducible artifacts)
-Write under `results/research/<run_id>/`:
+Write under `results/backtesting/<run_id>/`:
 - `config.json` (symbols, costs, split dates, parameter grids, objective, annualization basis)
 - `summary.csv` (per symbol, per variant: metrics for IS and OOS)
 - `series/` folder:
@@ -66,4 +66,3 @@ The harness SHOULD support a variant matrix, e.g.:
 - Optimize on IS only.
 - Lock best parameters and evaluate on OOS.
 - Include a plateau/sensitivity view by exporting heatmap-ready data.
-

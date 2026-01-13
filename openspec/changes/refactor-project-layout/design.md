@@ -72,6 +72,5 @@ dma-strategy-backend/
 - Core logic: `market_data.providers.yfinance` + `market_data.csv_io` + `market_data.naming`
 
 ### `add-research-eval-harness`
-- Command: `tooling.management.commands.research_eval`
+- Command: `tooling.management.commands.backtesting`
 - Core logic: `strategy_engine.*` and writes under `results/`
-

@@ -124,37 +124,40 @@ python3 manage.py runserver
 
 ## 离线数据准备：批量下载（yfinance → CSV）
 
-使用 Django management command 批量下载 **日线 OHLCV（adjusted）** 并写入 `DATA_DIR`（默认 `./data`）：
+使用 Django management command 批量下载 **日线 OHLCV（adjusted）** 并写入 `DATA_DIR`（默认 `./data`）。
+
+为避免同一标的产生多个 CSV 文件导致回测读取歧义，下载命令采用 **canonical 文件命名**：统一写入 `data/<CODE>.csv`（例如 `data/AAPL.csv`），并每次 **全量覆盖**（原子替换）。
 
 ```bash
-# period 模式（默认 3y）：输出如 data/AAPL_3y.csv
-python3 manage.py yfinance_batch_csv --symbols AAPL MSFT --period 3y
+# 下载从 canonical-start（默认 2010-01-01）到最新可得，输出如 data/AAPL.csv
+python3 manage.py yfinance_batch_csv --symbols AAPL MSFT
 
-# date-range 模式：输出如 data/AAPL_2015-01-01_2025-12-31.csv
-python3 manage.py yfinance_batch_csv --symbols AAPL --start-date 2015-01-01 --end-date 2025-12-31
+# 指定 canonical-start（例如从 2015-01-01 开始），输出仍为 data/AAPL.csv
+python3 manage.py yfinance_batch_csv --symbols AAPL --canonical-start 2015-01-01
 
-# 已存在文件默认跳过；使用 --force 覆盖（原子替换）
-python3 manage.py yfinance_batch_csv --symbols AAPL --force
+# 可选指定结束日期（例如固定到 2025-12-31），输出仍为 data/AAPL.csv
+python3 manage.py yfinance_batch_csv --symbols AAPL --canonical-start 2010-01-01 --end-date 2025-12-31
 ```
 
-## 离线研究评估：IS/OOS + ablation + grid search
+## 离线回测评估：IS/OOS + ablation + grid search
 
-项目提供研究评估命令 `research_eval`，用于对一组标的做固定 IS/OOS 拆分评估，并输出可复现产物到 `results/research/<run_id>/`（包含 `summary.csv`、逐标的/逐 variant 的 series 与 trades 等）。
+项目提供回测评估命令 `backtesting`，用于对一组标的做固定 IS/OOS 拆分评估，并输出产物到 `results/backtesting/<run_id>/`（包含 `summary.csv`、逐标的/逐 variant 的 series 与 trades 等）。
 
+参数与最佳实践见：`docs/backtesting.md`。
 回测指标口径说明见：`docs/backtest-metrics.md`。
 
 ```bash
 # 默认 IS=2015-01-01..2020-12-31, OOS=2021-01-01..latest
-python3 manage.py research_eval --symbols AAPL MSFT
+python3 manage.py backtesting --symbols AAPL MSFT
 
 # 启用网格搜索（只用 IS 选参，OOS 锁参评估）
-python3 manage.py research_eval --symbols AAPL --grid-search --search-metric sharpe
+python3 manage.py backtesting --symbols AAPL --grid-search --search-metric sharpe
 ```
 
 注意：
 
-- 如果你的 CSV 只覆盖最近几年（例如 `*_3y.csv`），默认 IS 段可能没有数据；`research_eval` 会直接失败，错误信息里会提示 CSV 覆盖区间与下一步操作。
-- 想跑默认 IS/OOS（2015..2020 / 2021..latest），请先用 `yfinance_batch_csv --start-date 2015-01-01` 下载更长历史；或通过 `--is-start/--is-end/--oos-start` 把拆分窗口调整到你的数据覆盖范围内。
+- 如果你的 CSV 覆盖区间不足（例如数据起始日期晚于默认 IS 结束 `2020-12-31`），`backtesting` 会直接失败，错误信息里会提示 CSV 覆盖区间与下一步操作。
+- 想跑默认 IS/OOS（2015..2020 / 2021..latest），请先用 `yfinance_batch_csv` 准备更长历史（默认从 `--canonical-start 2010-01-01` 开始写入 `data/<CODE>.csv`）；或通过 `--is-start/--is-end/--oos-start` 把拆分窗口调整到你的数据覆盖范围内。
 - 如需只跑 OOS 或只跑 IS，可分别使用 `--allow-empty-is` / `--allow-empty-oos`（默认关闭）。
 
 ### 示例请求

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Metric utilities for research evaluation (IS/OOS segmentation).
+"""Metric utilities for backtesting evaluation (IS/OOS segmentation).
 
 This module is intentionally framework-agnostic: it operates on plain Python
 records (lists of dicts) produced by the strategy engine and computes common

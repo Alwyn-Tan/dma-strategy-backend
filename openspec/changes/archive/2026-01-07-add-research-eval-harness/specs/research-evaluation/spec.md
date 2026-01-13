@@ -6,7 +6,7 @@ The system SHALL provide a Django management command to run research evaluations
 #### Scenario: Run evaluation across a pool
 - **WHEN** the user runs the command for a pool of symbols
 - **THEN** the system produces per-symbol results for all configured variants
-- **AND** writes outputs to a new `results/research/<run_id>/` directory
+- **AND** writes outputs to a new `results/backtesting/<run_id>/` directory
 
 ### Requirement: Fixed IS/OOS split evaluation
 The evaluation harness SHALL support a fixed split with IS `2015-01-01..2020-12-31` and OOS `2021-01-01..latest` by default.
@@ -30,4 +30,3 @@ MDD, Sharpe, Calmar, turnover, win rate, and profit/loss ratio.
 #### Scenario: Export summary CSV
 - **WHEN** the evaluation completes
 - **THEN** the harness writes `summary.csv` with per-symbol, per-variant metrics for IS and OOS
-

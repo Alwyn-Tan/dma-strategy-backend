@@ -1,9 +1,9 @@
-"""Research evaluation management command.
+"""Backtesting management command.
 
-This module implements the `research_eval` Django management command. It runs a
+This module implements the `backtesting` Django management command. It runs a
 fixed IS/OOS evaluation (optionally with IS-only grid search) across one or more
 symbols and strategy variants, and writes reproducible artifacts under
-`results/research/<run_id>/`.
+`results/backtesting/<run_id>/`.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.utils.dateparse import parse_date
 
 from market_data.services import StockDataService
-from strategy_engine.research_eval import summarize_segment
+from strategy_engine.backtest_metrics import summarize_segment
 from strategy_engine.services import StrategyService
 
 
@@ -29,12 +29,12 @@ class Command(BaseCommand):
     The command:
     1) loads local OHLCV CSV data via `StockDataService`,
     2) runs the strategy engine via `StrategyService.calculate_performance(...)`,
-    3) computes IS/OOS metrics via `strategy_engine.research_eval.summarize_segment`,
+    3) computes IS/OOS metrics via `strategy_engine.backtest_metrics.summarize_segment`,
     4) writes `config.json`, `summary.csv`, and per-variant artifacts under
        `series/`, `fills/`, and `trades/`.
     """
 
-    help = "Run research evaluations (IS/OOS + ablations + optional grid search) and write artifacts to results/research/<run_id>/."
+    help = "Run backtesting evaluations (IS/OOS + ablations + optional grid search) and write artifacts to results/backtesting/<run_id>/."
 
     DEFAULT_IS_START = date(2015, 1, 1)
     DEFAULT_IS_END = date(2020, 12, 31)
@@ -126,7 +126,7 @@ class Command(BaseCommand):
             w.writerows(rows)
 
     def add_arguments(self, parser):
-        """Register CLI arguments for `manage.py research_eval`."""
+        """Register CLI arguments for `manage.py backtesting`."""
         parser.add_argument(
             "--symbols",
             nargs="+",
@@ -137,7 +137,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--output-dir",
             default=None,
-            help="Base output directory (default: results/research).",
+            help="Base output directory (default: results/backtesting).",
         )
         parser.add_argument(
             "--data-dir",
@@ -205,7 +205,7 @@ class Command(BaseCommand):
         search is allowed only when IS has at least one bar.
 
         Side effects:
-            Writes artifacts under `results/research/<run_id>/` (or `--output-dir`).
+            Writes artifacts under `results/backtesting/<run_id>/` (or `--output-dir`).
 
         Raises:
             CommandError: For invalid date ranges, missing data coverage, or failed
@@ -231,7 +231,7 @@ class Command(BaseCommand):
             run_id = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
 
         output_dir_raw = options.get("output_dir")
-        base_output_dir = Path(output_dir_raw) if output_dir_raw else Path("results") / "research"
+        base_output_dir = Path(output_dir_raw) if output_dir_raw else Path("results") / "backtesting"
         run_dir = base_output_dir / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -374,7 +374,7 @@ class Command(BaseCommand):
         summary_rows: list[dict] = []
         failures: list[tuple[str, str]] = []
 
-        self.stdout.write(f"Research eval run_id={run_id} symbols={len(symbols)} variants={variants} -> {run_dir}")
+        self.stdout.write(f"Backtesting run_id={run_id} symbols={len(symbols)} variants={variants} -> {run_dir}")
 
         for raw_symbol in symbols:
             symbol = (raw_symbol or "").strip()
@@ -392,7 +392,7 @@ class Command(BaseCommand):
                     f"{symbol}: failed to load CSV ({exc}).\n"
                     f"Next:\n"
                     f"- Put a normalized CSV under {data_dir} with columns date,open,high,low,close,volume\n"
-                    f"- Or download via: python manage.py yfinance_batch_csv --symbols {symbol} --start-date {is_start.isoformat()} --force\n"
+                    f"- Or download via: python manage.py yfinance_batch_csv --symbols {symbol} --canonical-start 2010-01-01\n"
                     f"- Or point to a different folder via: --data-dir <path>"
                 ) from exc
 
@@ -416,7 +416,7 @@ class Command(BaseCommand):
                     f"{code}: grid search requires IS data, but IS has zero bars in {is_start.isoformat()}..{is_end.isoformat()} "
                     f"(CSV range {csv_min.isoformat()}..{csv_max.isoformat()}).\n"
                     f"Next:\n"
-                    f"- Download longer history: python manage.py yfinance_batch_csv --symbols {code} --start-date {is_start.isoformat()} --force\n"
+                    f"- Download longer history: python manage.py yfinance_batch_csv --symbols {code} --canonical-start 2010-01-01\n"
                     f"- Or adjust split: --is-start/--is-end (keep is_end < oos_start)\n"
                     f"- Or disable --grid-search"
                 )
@@ -426,7 +426,7 @@ class Command(BaseCommand):
                     f"{code}: IS segment has zero bars in {is_start.isoformat()}..{is_end.isoformat()} "
                     f"(CSV range {csv_min.isoformat()}..{csv_max.isoformat()}).\n"
                     f"Next:\n"
-                    f"- Download longer history: python manage.py yfinance_batch_csv --symbols {code} --start-date {is_start.isoformat()} --force\n"
+                    f"- Download longer history: python manage.py yfinance_batch_csv --symbols {code} --canonical-start 2010-01-01\n"
                     f"- Or adjust split: --is-start/--is-end/--oos-start/--oos-end (keep is_end < oos_start)\n"
                     f"- If you intentionally want to run OOS only: pass --allow-empty-is"
                 )

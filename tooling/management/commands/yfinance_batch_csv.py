@@ -12,7 +12,7 @@ from market_data.services import StockDataService
 
 
 class Command(BaseCommand):
-    help = "Batch download daily OHLCV from yfinance (adjusted) and write normalized CSVs to DATA_DIR."
+    help = "Batch download daily OHLCV from yfinance (adjusted) and write canonical CSVs to DATA_DIR/<CODE>.csv."
 
     @staticmethod
     def _parse_ymd(value: Optional[str], *, field_name: str) -> Optional[date]:
@@ -32,11 +32,16 @@ class Command(BaseCommand):
             help="One or more symbols (e.g., AAPL MSFT 00700.HK).",
         )
         parser.add_argument(
+            "--canonical-start",
+            default="2010-01-01",
+            help="YYYY-MM-DD (default: 2010-01-01). Download starts from this date and writes to <CODE>.csv.",
+        )
+        parser.add_argument(
             "--period",
             default="3y",
-            help="Used only when neither --start-date nor --end-date is provided (default: 3y).",
+            help="Deprecated. Use --canonical-start (and optionally --end-date).",
         )
-        parser.add_argument("--start-date", default=None, help="YYYY-MM-DD (optional).")
+        parser.add_argument("--start-date", default=None, help="Deprecated. Use --canonical-start.")
         parser.add_argument("--end-date", default=None, help="YYYY-MM-DD (optional).")
         parser.add_argument(
             "--output-dir",
@@ -46,15 +51,15 @@ class Command(BaseCommand):
         parser.add_argument(
             "--force",
             action="store_true",
-            help="Overwrite existing files (atomic replace).",
+            help="Deprecated (no-op). The command always overwrites <CODE>.csv (atomic replace).",
         )
 
     def handle(self, *args, **options):
         symbols: list[str] = list(options["symbols"] or [])
-        period: str = str(options.get("period") or "3y")
+        canonical_start = self._parse_ymd(options.get("canonical_start"), field_name="canonical_start") or date(2010, 1, 1)
         start_date = self._parse_ymd(options.get("start_date"), field_name="start_date")
         end_date = self._parse_ymd(options.get("end_date"), field_name="end_date")
-        force: bool = bool(options.get("force", False))
+        period: str = str(options.get("period") or "3y")
 
         output_dir_raw = options.get("output_dir")
         output_dir = Path(output_dir_raw) if output_dir_raw else Path(settings.DATA_DIR)
@@ -64,7 +69,12 @@ class Command(BaseCommand):
         written = 0
         skipped = 0
 
-        mode = "date-range" if (start_date or end_date) else "period"
+        if start_date is not None:
+            raise CommandError("--start-date is deprecated; use --canonical-start instead.")
+        if (period or "").strip() != "3y":
+            raise CommandError("--period is deprecated; use --canonical-start (and optionally --end-date) instead.")
+
+        mode = "canonical-range"
         self.stdout.write(
             f"Downloading {len(symbols)} symbol(s) from yfinance (mode={mode}, auto_adjust=true) -> {output_dir}"
         )
@@ -76,22 +86,11 @@ class Command(BaseCommand):
 
             try:
                 code = StockDataService._validate_code(symbol).upper()
-                filename = StockDataService.build_batch_csv_filename(
-                    code,
-                    start_date=start_date,
-                    end_date=end_date,
-                    period=period,
-                )
-                out_path = output_dir / filename
-
-                if out_path.exists() and not force:
-                    skipped += 1
-                    self.stdout.write(f"[SKIP] {code} -> {out_path.name} (exists; use --force to overwrite)")
-                    continue
+                out_path = output_dir / f"{code}.csv"
 
                 df = StockDataService.fetch_yfinance_ohlcv(
                     code,
-                    start_date=start_date,
+                    start_date=canonical_start,
                     end_date=end_date,
                     period=period,
                     auto_adjust=True,
@@ -117,4 +116,3 @@ class Command(BaseCommand):
             summary = ", ".join([f"{sym}({msg})" for sym, msg in failures[:5]])
             more = "" if len(failures) <= 5 else f" (+{len(failures) - 5} more)"
             raise CommandError(f"Some symbols failed: {summary}{more}")
-

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -124,6 +125,65 @@ class Command(BaseCommand):
             w = csv.DictWriter(f, fieldnames=fieldnames)
             w.writeheader()
             w.writerows(rows)
+
+    @staticmethod
+    def _round_for_csv(key: str, value):
+        """Round numeric metrics for CSV readability without changing semantics.
+
+        Args:
+            key: Metric key (e.g., "is_sharpe", "oos_mdd", "turnover").
+            value: Metric value (typically float/int/None).
+        Returns:
+            Rounded numeric value (still numeric), or original value if not applicable.
+        Notes:
+            This is intentionally applied only at the I/O layer (CSV writing). Core
+            computations and grid-search scoring use full precision.
+        """
+        if value is None:
+            return None
+
+        if key in {"short_window", "long_window", "bars", "trades", "is_bars", "oos_bars", "is_trades", "oos_trades"}:
+            try:
+                numeric = float(value)
+            except Exception:
+                return value
+            if math.isnan(numeric) or math.isinf(numeric):
+                return numeric
+            return int(numeric)
+
+        suffix = key.split("_", 1)[-1] if "_" in key else key
+        decimals_by_suffix = {
+            "cagr": 4,
+            "mdd": 4,
+            "win_rate": 4,
+            "avg_exposure": 4,
+            "turnover": 2,
+            "sharpe": 3,
+            "calmar": 3,
+            "pl_ratio": 3,
+        }
+        decimals = decimals_by_suffix.get(suffix)
+        if decimals is None:
+            return value
+
+        try:
+            numeric = float(value)
+        except Exception:
+            return value
+        if math.isnan(numeric) or math.isinf(numeric):
+            return numeric
+        return round(numeric, decimals)
+
+    @classmethod
+    def _format_row_for_csv(cls, row: dict) -> dict:
+        """Format a metrics row for CSV export.
+
+        Args:
+            row: Row dict to be written by `csv.DictWriter`.
+        Returns:
+            A new dict with numeric fields rounded for readability.
+        """
+        return {k: cls._round_for_csv(k, v) for k, v in (row or {}).items()}
 
     def add_arguments(self, parser):
         """Register CLI arguments for `manage.py backtesting`."""
@@ -493,17 +553,19 @@ class Command(BaseCommand):
                                 if score != score:
                                     score = float("-inf")
                                 grid_rows.append(
-                                    {
-                                        "code": code,
-                                        "variant": variant,
-                                        "short_window": s,
-                                        "long_window": l,
-                                        "bars": seg.get("bars"),
-                                        "cagr": seg.get("cagr"),
-                                        "mdd": seg.get("mdd"),
-                                        "sharpe": seg.get("sharpe"),
-                                        "calmar": seg.get("calmar"),
-                                    }
+                                    self._format_row_for_csv(
+                                        {
+                                            "code": code,
+                                            "variant": variant,
+                                            "short_window": s,
+                                            "long_window": l,
+                                            "bars": seg.get("bars"),
+                                            "cagr": seg.get("cagr"),
+                                            "mdd": seg.get("mdd"),
+                                            "sharpe": seg.get("sharpe"),
+                                            "calmar": seg.get("calmar"),
+                                        }
+                                    )
                                 )
                                 if score > best_score:
                                     best_score = score
@@ -546,32 +608,34 @@ class Command(BaseCommand):
                 )
 
                 summary_rows.append(
-                    {
-                        "code": code,
-                        "variant": variant,
-                        "short_window": chosen_short,
-                        "long_window": chosen_long,
-                        "is_bars": is_metrics.get("bars"),
-                        "is_cagr": is_metrics.get("cagr"),
-                        "is_mdd": is_metrics.get("mdd"),
-                        "is_sharpe": is_metrics.get("sharpe"),
-                        "is_calmar": is_metrics.get("calmar"),
-                        "is_turnover": is_metrics.get("turnover"),
-                        "is_avg_exposure": is_metrics.get("avg_exposure"),
-                        "is_trades": is_metrics.get("trades"),
-                        "is_win_rate": is_metrics.get("win_rate"),
-                        "is_pl_ratio": is_metrics.get("pl_ratio"),
-                        "oos_bars": oos_metrics.get("bars"),
-                        "oos_cagr": oos_metrics.get("cagr"),
-                        "oos_mdd": oos_metrics.get("mdd"),
-                        "oos_sharpe": oos_metrics.get("sharpe"),
-                        "oos_calmar": oos_metrics.get("calmar"),
-                        "oos_turnover": oos_metrics.get("turnover"),
-                        "oos_avg_exposure": oos_metrics.get("avg_exposure"),
-                        "oos_trades": oos_metrics.get("trades"),
-                        "oos_win_rate": oos_metrics.get("win_rate"),
-                        "oos_pl_ratio": oos_metrics.get("pl_ratio"),
-                    }
+                    self._format_row_for_csv(
+                        {
+                            "code": code,
+                            "variant": variant,
+                            "short_window": chosen_short,
+                            "long_window": chosen_long,
+                            "is_bars": is_metrics.get("bars"),
+                            "is_cagr": is_metrics.get("cagr"),
+                            "is_mdd": is_metrics.get("mdd"),
+                            "is_sharpe": is_metrics.get("sharpe"),
+                            "is_calmar": is_metrics.get("calmar"),
+                            "is_turnover": is_metrics.get("turnover"),
+                            "is_avg_exposure": is_metrics.get("avg_exposure"),
+                            "is_trades": is_metrics.get("trades"),
+                            "is_win_rate": is_metrics.get("win_rate"),
+                            "is_pl_ratio": is_metrics.get("pl_ratio"),
+                            "oos_bars": oos_metrics.get("bars"),
+                            "oos_cagr": oos_metrics.get("cagr"),
+                            "oos_mdd": oos_metrics.get("mdd"),
+                            "oos_sharpe": oos_metrics.get("sharpe"),
+                            "oos_calmar": oos_metrics.get("calmar"),
+                            "oos_turnover": oos_metrics.get("turnover"),
+                            "oos_avg_exposure": oos_metrics.get("avg_exposure"),
+                            "oos_trades": oos_metrics.get("trades"),
+                            "oos_win_rate": oos_metrics.get("win_rate"),
+                            "oos_pl_ratio": oos_metrics.get("pl_ratio"),
+                        }
+                    )
                 )
 
                 self._write_rows_csv(series_dir / f"{code}__{variant}__daily.csv", list(daily))

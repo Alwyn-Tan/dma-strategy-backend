@@ -17,6 +17,11 @@
 - `results/backtesting/<run_id>/trades/*.csv`：已平仓交易（来自回测 `details["closed_trades"]`）
 - `results/backtesting/<run_id>/grid/*.csv`：网格搜索明细（仅 `--grid-search` 时输出）
 
+说明：
+
+- 为提升可读性，`summary.csv` 与 `grid/*.csv` 中的数值会在写出前按字段做统一 round（仍以数值写出，不会转成字符串）。
+- 这不会影响策略计算与网格搜索选参（内部计算使用全精度）。
+
 ## 2. 数据准备（强烈推荐）
 
 本项目数据下载采用 **canonical 单文件命名**：同一标的统一写入 `data/<CODE>.csv`，避免多个 CSV 造成回测读取歧义。
@@ -300,4 +305,3 @@ python manage.py backtesting --symbols AAPL --grid-search \
   - 需要满足 `is_end < oos_start`
 - `grid search requires IS data`：
   - 网格搜索必须有 IS bars；请补齐 IS 覆盖或关闭 `--grid-search`
-
